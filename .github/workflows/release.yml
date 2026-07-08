@@ -1,0 +1,17 @@
+name: Release
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+on: # yamllint disable-line rule:truthy
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@c8b0b55d0856e5844ab3f6007d531a194543005a # v1.0.0
+    with:
+      spoon_name: ProcessWatcher

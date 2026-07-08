@@ -1,0 +1,50 @@
+amends "package://github.com/jdx/hk/releases/download/v1.49.0/hk@1.49.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.49.0/hk@1.49.0#/Builtins.pkl"
+
+local Common = new Group {
+    steps {
+        ["actionlint"] = Builtins.actionlint
+        ["pinact"] = Builtins.pinact
+        ["conflicts"] = Builtins.check_merge_conflict
+        ["trailing-ws"] = Builtins.trailing_whitespace
+        ["line-endings"] = Builtins.mixed_line_ending
+        ["newlines"] = Builtins.newlines
+        ["case-conflict"] = Builtins.check_case_conflict
+        ["large-files"] = Builtins.check_added_large_files
+        ["executables"] = Builtins.check_executables_have_shebangs
+        ["symlinks"] = Builtins.check_symlinks
+        ["dprint"] = Builtins.dprint
+        ["gitleaks"] = Builtins.gitleaks
+        ["ghalint"] = Builtins.ghalint_workflow
+        ["markdown"] = Builtins.rumdl
+        ["zizmor"] = Builtins.zizmor
+        ["typos"] = Builtins.typos
+        ["mise"] = Builtins.mise
+    }
+}
+
+local linters = new Mapping<String, Step> {
+    ...Common.steps
+    ["lua"] = Builtins.luacheck
+    ["stylua"] = Builtins.stylua
+    ["toml"] = Builtins.tombi
+    ["yaml"] = Builtins.ryl
+}
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps = linters
+    }
+    ["pre-push"] {
+        steps = linters
+    }
+    ["check"] {
+        steps = linters
+    }
+    ["fix"] {
+        fix = true
+        steps = linters
+    }
+}

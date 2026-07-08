@@ -1,0 +1,43 @@
+[tools]
+"github:orhun/git-cliff" = "2.13.1"
+actionlint = "1.7.12"
+pinact = "4.1.0"
+dprint = "0.55.1"
+ghalint = "1.5.6"
+gitleaks = "8.30.1"
+hk = "1.49.0"
+lua = "5.4"
+rumdl = "0.2.25"
+stylua = "2.5.2"
+tombi = "1.1.6"
+typos = "1.47.2"
+uv = "0.8.17"
+"github:owenlamont/ryl" = "0.21.0"
+zizmor = "1.26.1"
+
+[tasks.docs]
+run = "uvx --from git+https://github.com/hugoh/spoon-tools spoon-generate-docs"
+description = "Generate docs/docs.json and docs/index.html from docstrings"
+
+[tasks.package]
+depends = ["docs"]
+run = """
+rm -rf dist
+mkdir -p dist/ProcessWatcher.spoon
+cp init.lua LICENSE README.md docs/docs.json dist/ProcessWatcher.spoon/
+cp -r bin dist/ProcessWatcher.spoon/
+cd dist
+zip -r ../ProcessWatcher.spoon.zip ProcessWatcher.spoon
+cd ..
+rm -rf dist
+"""
+description = "Build a self-contained ProcessWatcher.spoon.zip (includes docs.json)"
+
+[tasks.test]
+run = "busted test_spec.lua --verbose"
+
+[hooks]
+postinstall = ["luarocks install busted", "luarocks install luacheck"]
+
+[settings]
+experimental = true # for hooks

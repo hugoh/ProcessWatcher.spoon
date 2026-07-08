@@ -1,0 +1,21 @@
+name: hk
+
+permissions:
+  contents: read
+  packages: read
+  statuses: write
+
+on: # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - main
+      - renovate/**
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: hugoh/spoon-tools/.github/workflows/spoon-hk.yml@c8b0b55d0856e5844ab3f6007d531a194543005a # v1.0.0

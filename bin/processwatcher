@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# CLI for ProcessWatcher.spoon, built on Hammerspoon's `hs` IPC CLI.
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+Usage: processwatcher <command> [args]
+
+Commands:
+  status              List flagged processes plus current top CPU/memory processes
+  kill <name|pid>     Terminate a process by name or PID
+  config              Print current thresholds/sustain/interval/allowlist/overrides
+  reload              Re-read config.json from disk and restart monitoring if running
+EOF
+}
+
+# Escapes a value as a double-quoted Lua string literal.
+lua_quote() {
+	local s=$1
+	s=${s//\\/\\\\}
+	s=${s//\"/\\\"}
+	printf '"%s"' "$s"
+}
+
+if ! command -v hs >/dev/null 2>&1; then
+	echo "error: the 'hs' CLI is not installed. In the Hammerspoon console run: hs.ipc.cliInstall()" >&2
+	exit 1
+fi
+
+cmd="${1:-}"
+case "$cmd" in
+status)
+	hs -c 'print(spoon.ProcessWatcher:status())'
+	;;
+kill)
+	target="${2:-}"
+	if [ -z "$target" ]; then
+		echo "usage: processwatcher kill <name|pid>" >&2
+		exit 1
+	fi
+	hs -c "print(spoon.ProcessWatcher:kill($(lua_quote "$target")) and 'terminated' or 'not found')"
+	;;
+config)
+	hs -c 'print(spoon.ProcessWatcher:configSummary())'
+	;;
+reload)
+	hs -c 'spoon.ProcessWatcher:reloadConfig(); print("reloaded: " .. spoon.ProcessWatcher:configSummary())'
+	;;
+*)
+	usage
+	exit 1
+	;;
+esac
