@@ -34,7 +34,7 @@ status)
 	;;
 kill)
 	target="${2:-}"
-	if [ -z "$target" ]; then
+	if [ "$target" = "" ]; then
 		echo "usage: processwatcher kill <name|pid>" >&2
 		exit 1
 	fi
