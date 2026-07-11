@@ -1,30 +1,9 @@
 amends "package://github.com/jdx/hk/releases/download/v1.49.0/hk@1.49.0#/Config.pkl"
 import "package://github.com/jdx/hk/releases/download/v1.49.0/hk@1.49.0#/Builtins.pkl"
-
-local Common = new Group {
-    steps {
-        ["actionlint"] = Builtins.actionlint
-        ["pinact"] = Builtins.pinact
-        ["conflicts"] = Builtins.check_merge_conflict
-        ["trailing-ws"] = Builtins.trailing_whitespace
-        ["line-endings"] = Builtins.mixed_line_ending
-        ["newlines"] = Builtins.newlines
-        ["case-conflict"] = Builtins.check_case_conflict
-        ["large-files"] = Builtins.check_added_large_files
-        ["executables"] = Builtins.check_executables_have_shebangs
-        ["symlinks"] = Builtins.check_symlinks
-        ["dprint"] = Builtins.dprint
-        ["gitleaks"] = Builtins.gitleaks
-        ["ghalint"] = Builtins.ghalint_workflow
-        ["markdown"] = Builtins.rumdl
-        ["zizmor"] = Builtins.zizmor
-        ["typos"] = Builtins.typos
-        ["mise"] = Builtins.mise
-    }
-}
+import "package://github.com/hugoh/hk-config/releases/download/v0.1.0/hk-config@0.1.0#/base.pkl" as Base
 
 local linters = new Mapping<String, Step> {
-    ...Common.steps
+    ...Base.base
     ["lua"] = Builtins.luacheck
     ["stylua"] = Builtins.stylua
     ["toml"] = Builtins.tombi
