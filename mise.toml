@@ -2,7 +2,7 @@
 "github:orhun/git-cliff" = "2.13.1"
 actionlint = "1.7.12"
 pinact = "4.1.0"
-dprint = "0.55.1"
+biome = "2.5.4"
 ghalint = "1.5.6"
 gitleaks = "8.30.1"
 hk = "1.50.0"
