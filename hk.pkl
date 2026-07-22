@@ -1,6 +1,6 @@
-amends "package://github.com/jdx/hk/releases/download/v1.50.0/hk@1.50.0#/Config.pkl"
-import "package://github.com/jdx/hk/releases/download/v1.50.0/hk@1.50.0#/Builtins.pkl"
-import "package://github.com/hugoh/hk-config/releases/download/v1.0.0/hk-config@1.0.0#/base.pkl" as Base
+amends "package://github.com/jdx/hk/releases/download/v1.52.0/hk@1.52.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.52.0/hk@1.52.0#/Builtins.pkl"
+import "package://github.com/hugoh/hk-config/releases/download/v1.2.0/hk-config@1.2.0#/base.pkl" as Base
 
 min_hk_version = Base.min_hk_version
 
@@ -25,5 +25,10 @@ hooks {
     ["fix"] {
         fix = true
         steps = linters
+    }
+    ["commit-msg"] {
+        steps = new Mapping<String, Step> {
+            ...Base.commit_msg
+        }
     }
 }
