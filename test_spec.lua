@@ -755,6 +755,22 @@ describe("ProcessWatcher", function()
 			assert.truthy(ProcessWatcher:status():find("pid=111,222"))
 		end)
 
+		it("shows the leaky-bucket decay progress for a flagged metric", function()
+			ProcessWatcher._flagged["Bad"] = { since = os.time(), cpu = true, cpu_value = 99, pids = { "1" } }
+			ProcessWatcher._counters.cpu["Bad"] = 7
+			assert.truthy(ProcessWatcher:status():find("CPU 99%% %[7 ticks to clear%]"))
+		end)
+
+		it("shows decay progress for both metrics when a process is flagged on cpu and mem", function()
+			ProcessWatcher._flagged["Bad"] =
+				{ since = os.time(), cpu = true, cpu_value = 99, mem = true, mem_value = 40, pids = { "1" } }
+			ProcessWatcher._counters.cpu["Bad"] = 3
+			ProcessWatcher._counters.mem["Bad"] = 5
+			local s = ProcessWatcher:status()
+			assert.truthy(s:find("CPU 99%% %[3 ticks to clear%]"))
+			assert.truthy(s:find("Mem 40%% %[5 ticks to clear%]"))
+		end)
+
 		it("shows top CPU/memory processes once a sample has been taken", function()
 			mock_hs._setExecHandler(
 				function(_cmd) return "111  80.0  10.0 Chrome\n222  20.0  5.0 Finder\n", true, "exit", 0 end
