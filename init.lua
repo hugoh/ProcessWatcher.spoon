@@ -561,8 +561,18 @@ function obj:status()
 			local f = self._flagged[name]
 			local elapsed = os.time() - f.since
 			local parts = {}
-			if f.cpu then table.insert(parts, string.format("CPU %.0f%%", f.cpu_value or 0)) end
-			if f.mem then table.insert(parts, string.format("Mem %.0f%%", f.mem_value or 0)) end
+			if f.cpu then
+				table.insert(
+					parts,
+					string.format("CPU %.0f%% [%d ticks to clear]", f.cpu_value or 0, self._counters.cpu[name] or 0)
+				)
+			end
+			if f.mem then
+				table.insert(
+					parts,
+					string.format("Mem %.0f%% [%d ticks to clear]", f.mem_value or 0, self._counters.mem[name] or 0)
+				)
+			end
 			table.insert(
 				lines,
 				string.format(
