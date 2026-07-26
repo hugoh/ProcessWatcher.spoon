@@ -1,0 +1,17 @@
+name: Tag
+
+permissions:
+  contents: write
+
+on: # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    uses: hugoh/spoon-tools/.github/workflows/spoon-tag.yml@cb7c2e63589d5e71e224723a1dea87edc2442232 # v1.2.0
