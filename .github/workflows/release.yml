@@ -10,9 +10,15 @@ on: # yamllint disable-line rule:truthy
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release (used to backfill a missed release; leave empty for normal use)
+        required: false
+        type: string
 
 jobs:
   release:
-    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@c8b0b55d0856e5844ab3f6007d531a194543005a # v1.0.0
+    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@00ffd41dd5a3ec8dd556e29ca219151860a9bae8 # v1.2.2
     with:
       spoon_name: ProcessWatcher
+      tag: ${{ inputs.tag }}
