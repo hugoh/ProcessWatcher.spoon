@@ -2,6 +2,7 @@ name: Tag
 
 permissions:
   contents: write
+  actions: write
 
 on: # yamllint disable-line rule:truthy
   push:
@@ -14,4 +15,4 @@ concurrency:
 
 jobs:
   tag:
-    uses: hugoh/spoon-tools/.github/workflows/spoon-tag.yml@cb7c2e63589d5e71e224723a1dea87edc2442232 # v1.2.0
+    uses: hugoh/spoon-tools/.github/workflows/spoon-tag.yml@d2b5ed14d0971e0f71e1459a697d78195e324f2a # v1.2.1
