@@ -149,7 +149,6 @@ describe("ProcessWatcher", function()
 		it("has required methods", function()
 			for _, m in ipairs({
 				"loadConfig",
-				"saveConfig",
 				"configure",
 				"reloadConfig",
 				"openConfig",
@@ -188,6 +187,46 @@ describe("ProcessWatcher", function()
 			assert.are.equal("Xcode", ProcessWatcher._config.allowlist[1])
 		end)
 
+		it("never writes config.json", function()
+			mock_hs._setConfig(ProcessWatcher.configPath, { cpuThreshold = 50 })
+			local writeCalled = false
+			mock_hs.json.write = function()
+				writeCalled = true
+				return true
+			end
+			ProcessWatcher:loadConfig()
+			assert.is_false(writeCalled)
+		end)
+
+		it("does not create config.json when none existed", function()
+			local writeCalled = false
+			mock_hs.json.write = function()
+				writeCalled = true
+				return true
+			end
+			ProcessWatcher:loadConfig()
+			assert.is_false(writeCalled)
+		end)
+
+		it("configure() never writes config.json", function()
+			ProcessWatcher:loadConfig()
+			local writeCalled = false
+			mock_hs.json.write = function()
+				writeCalled = true
+				return true
+			end
+			ProcessWatcher:configure({ cpuThreshold = 91 })
+			assert.is_false(writeCalled)
+		end)
+
+		it("configure() scalar key overrides disk value; omitted keys keep the disk value", function()
+			mock_hs._setConfig(ProcessWatcher.configPath, { cpuThreshold = 70, memThreshold = 60 })
+			ProcessWatcher:loadConfig()
+			ProcessWatcher:configure({ cpuThreshold = 91 })
+			assert.are.equal(91, ProcessWatcher._config.cpuThreshold)
+			assert.are.equal(60, ProcessWatcher._config.memThreshold) -- untouched, from disk
+		end)
+
 		it("keeps a malformed file untouched instead of overwriting it", function()
 			-- Simulate: file exists on disk (hs.fs.attributes truthy) but hs.json.read
 			-- returned nil because it failed to parse.
@@ -205,6 +244,15 @@ describe("ProcessWatcher", function()
 	end)
 
 	describe("reloadConfig", function()
+		it("reflects both a fresh disk edit and a previously-set configure() value", function()
+			ProcessWatcher:loadConfig()
+			ProcessWatcher:configure({ cpuThreshold = 91 })
+			mock_hs._setConfig(ProcessWatcher.configPath, { memThreshold = 33 })
+			ProcessWatcher:reloadConfig()
+			assert.are.equal(91, ProcessWatcher._config.cpuThreshold) -- Lua overlay still applied
+			assert.are.equal(33, ProcessWatcher._config.memThreshold) -- fresh disk value picked up
+		end)
+
 		it("picks up changes written to disk since the last load", function()
 			ProcessWatcher:loadConfig()
 			assert.are.equal(90, ProcessWatcher._config.cpuThreshold)
@@ -372,8 +420,9 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("loadConfig() rejects an invalid on-disk config without touching a previously-loaded one", function()
+			mock_hs._setConfig(ProcessWatcher.configPath, { interval = 60, sustainSeconds = 600 })
 			ProcessWatcher:loadConfig()
-			ProcessWatcher:configure({ interval = 60, sustainSeconds = 600 })
+			assert.are.equal(60, ProcessWatcher._config.interval)
 			mock_hs._setConfig(ProcessWatcher.configPath, { interval = 600, sustainSeconds = 600 })
 			assert.has_error(function() ProcessWatcher:loadConfig() end)
 			assert.are.equal(60, ProcessWatcher._config.interval) -- old in-memory config survives
@@ -382,14 +431,13 @@ describe("ProcessWatcher", function()
 		it("reloadConfig() with a broken on-disk file leaves already-running monitoring untouched", function()
 			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
 			ProcessWatcher:loadConfig()
-			ProcessWatcher:configure({ interval = 60, sustainSeconds = 600 })
 			ProcessWatcher:start()
 			local timerBefore = ProcessWatcher._timer
 			mock_hs._setConfig(ProcessWatcher.configPath, { interval = 600, sustainSeconds = 600 })
 			assert.has_error(function() ProcessWatcher:reloadConfig() end)
 			assert.is_true(ProcessWatcher._running)
 			assert.are.equal(timerBefore, ProcessWatcher._timer) -- never stopped/restarted
-			assert.are.equal(60, ProcessWatcher._config.interval)
+			assert.are.equal(30, ProcessWatcher._config.interval) -- unchanged default from initial load
 		end)
 
 		it(
@@ -425,6 +473,27 @@ describe("ProcessWatcher", function()
 		before_each(function()
 			ProcessWatcher:loadConfig()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 3, cpuThreshold = 90 })
+		end)
+
+		it("concatenates Lua-configured overrides before disk overrides, Lua first", function()
+			mock_hs._setConfig(ProcessWatcher.configPath, {
+				overrides = { { pattern = "Finder", cpuThreshold = 300 } },
+			})
+			ProcessWatcher:loadConfig()
+			ProcessWatcher:configure({ overrides = { { pattern = "Teams", cpuThreshold = 200 } } })
+			assert.are.equal(2, #ProcessWatcher._config.overrides)
+			assert.are.equal("Teams", ProcessWatcher._config.overrides[1].pattern)
+			assert.are.equal("Finder", ProcessWatcher._config.overrides[2].pattern)
+		end)
+
+		it("does not touch disk overrides when configure() doesn't set the overrides key", function()
+			mock_hs._setConfig(ProcessWatcher.configPath, {
+				overrides = { { pattern = "Finder", cpuThreshold = 300 } },
+			})
+			ProcessWatcher:loadConfig()
+			ProcessWatcher:configure({ cpuThreshold = 91 })
+			assert.are.equal(1, #ProcessWatcher._config.overrides)
+			assert.are.equal("Finder", ProcessWatcher._config.overrides[1].pattern)
 		end)
 
 		it("raises the effective threshold for names matching a pattern", function()
@@ -514,6 +583,13 @@ describe("ProcessWatcher", function()
 		before_each(function()
 			ProcessWatcher:loadConfig()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 2, cpuThreshold = 90 })
+		end)
+
+		it("concatenates a Lua-configured allowlist before the disk allowlist", function()
+			mock_hs._setConfig(ProcessWatcher.configPath, { allowlist = { "Finder" } })
+			ProcessWatcher:loadConfig()
+			ProcessWatcher:configure({ allowlist = { "Xcode" } })
+			assert.are.same({ "Xcode", "Finder" }, ProcessWatcher._config.allowlist)
 		end)
 
 		it("never flags a process on the allowlist", function()
