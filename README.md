@@ -16,7 +16,7 @@ A Hammerspoon Spoon that watches for processes that have gotten out of hand — 
 - Configurable allowlist for processes that should never be flagged (compilers, encoders, backups, etc.), plus a temporary snooze via the notification's Ignore action
 - Per-process threshold/sustain overrides, matched by Lua pattern (e.g. give Teams' helper processes more headroom before alerting)
 - CLI (`bin/processwatcher`), built on Hammerspoon's `hs` IPC tool, for querying status, killing a process, and inspecting config from the terminal
-- Config file is human-editable JSON, with a menu item to open it directly
+- Config file is human-editable JSON, merged with any settings passed from Lua, with a menu item to open it directly
 
 ## Installation
 
@@ -52,7 +52,7 @@ Add the following to your `~/.hammerspoon/init.lua`:
 hs.loadSpoon("ProcessWatcher"):start()
 ```
 
-Config lives at `~/.config/ProcessWatcher/config.json` (created with defaults on first run). You can also set it from Lua before starting:
+Settings live in `~/.config/ProcessWatcher/config.json`, which you can edit by hand (the menu bar's **Edit Config…** opens it directly). You can also configure from Lua before `start()` — it's merged with `config.json`: Lua settings take priority, and `allowlist`/`overrides` combine entries from both. Either way, ProcessWatcher never writes to `config.json` itself, so your hand edits are always safe:
 
 ```lua
 hs.loadSpoon("ProcessWatcher"):configure({
@@ -71,7 +71,7 @@ hs.loadSpoon("ProcessWatcher"):configure({
 }):start()
 ```
 
-`interval` must be strictly less than `sustainSeconds` (and both must be positive) — `configure()`/`loadConfig()` raise a Lua `error()` otherwise, rather than silently accepting a config where the leaky-bucket sustain logic collapses to a single sample (`interval >= sustainSeconds` means a process flags on the very first over-threshold sample and unflags on the very next low one, with none of the intended dip-tolerance). This validation never mutates state before it passes: an invalid `configure()` call leaves the current config and any running monitoring completely untouched, and an invalid on-disk `config.json` only prevents a first-ever `start()` — it can't disrupt already-running monitoring via `reloadConfig()`, since `reloadConfig()` reads and validates the new config _before_ stopping the old one.
+`interval` must be strictly less than `sustainSeconds`, and both must be positive — otherwise a process could flag on the very first over-threshold sample and clear on the very next low one, with none of the intended dip-tolerance. An invalid config (from Lua or a hand-edited `config.json`) raises an error and leaves your current settings and any running monitoring untouched.
 
 ### Per-process overrides
 
@@ -94,8 +94,8 @@ Note: on a crowded menu bar (many status items, or a notched MacBook Pro display
 
 ## Methods
 
-- `configure(cfg)` - Merge settings into the config, persist them, and restart monitoring if already running
-- `loadConfig()` / `saveConfig()` - Load/save the JSON config file directly
+- `configure(cfg)` - Merge settings into the config (never written to `config.json`) and restart monitoring if already running
+- `loadConfig()` - Load `config.json` from disk and merge it with any settings passed to `configure()`
 - `reloadConfig()` - Re-read `config.json` from disk (e.g. after hand-editing it) and restart monitoring if running
 - `openConfig()` - Open the config file in your default JSON editor
 - `start()` - Begin periodic sampling and show the menu bar icon

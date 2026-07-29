@@ -81,81 +81,97 @@ local function validateConfig(cfg)
 	return true
 end
 
---- ProcessWatcher:loadConfig()
---- Method
---- Loads config from `configPath`, filling in defaults for missing keys. Errors (via `error()`)
---- if the resulting config is invalid (e.g. interval >= sustainSeconds) without touching any
---- previously-loaded config -- so a broken on-disk file can never disrupt already-running
---- monitoring via reloadConfig(), only prevent a first-ever start().
-function obj:loadConfig()
+local function _mergeConfigs(diskCfg, luaCfg)
+	local merged = {}
+	for k in pairs(DEFAULT_CONFIG) do
+		if k ~= "allowlist" and k ~= "overrides" then merged[k] = luaCfg[k] ~= nil and luaCfg[k] or diskCfg[k] end
+	end
+	for _, key in ipairs({ "allowlist", "overrides" }) do
+		-- diskCfg here is sometimes self._luaConfig (via configure()'s first merge
+		-- layer), which may not yet have this key at all -- guard against nil in
+		-- both branches, since ipairs(nil) and hs.fnutils.copy(nil) both error.
+		if luaCfg[key] ~= nil then
+			merged[key] = {}
+			for _, v in ipairs(luaCfg[key]) do
+				table.insert(merged[key], v)
+			end
+			for _, v in ipairs(diskCfg[key] or {}) do
+				table.insert(merged[key], v)
+			end
+		else
+			merged[key] = hs.fnutils.copy(diskCfg[key] or {})
+		end
+	end
+	return merged
+end
+
+local function _readDiskConfig(self)
 	local config = hs.json.read(self.configPath)
 	-- hs.json.read returns nil both when the file is missing and when it exists
 	-- but fails to parse (malformed JSON). Distinguish the two via hs.fs.attributes
-	-- so a corrupt file is surfaced instead of being silently discarded and
-	-- immediately overwritten with an empty default config.
+	-- so a corrupt file is surfaced instead of being silently treated as empty.
 	local parseFailed = config == nil and hs.fs.attributes(self.configPath) ~= nil
 	config = config or {}
-	local candidate = {}
+	local diskConfig = {}
 	for k, v in pairs(DEFAULT_CONFIG) do
 		if config[k] ~= nil then
-			candidate[k] = config[k]
+			diskConfig[k] = config[k]
 		else
-			candidate[k] = v
+			diskConfig[k] = v
 		end
 	end
-	candidate.allowlist = hs.fnutils.copy(config.allowlist or {})
-	candidate.overrides = hs.fnutils.copy(config.overrides or {})
+	diskConfig.allowlist = hs.fnutils.copy(config.allowlist or {})
+	diskConfig.overrides = hs.fnutils.copy(config.overrides or {})
+	return { config = diskConfig, parseFailed = parseFailed }
+end
+
+--- ProcessWatcher:loadConfig()
+--- Method
+--- Loads config from `configPath`, merged with any values previously passed to
+--- `configure()`, filling in defaults for missing keys. Never writes `configPath` --
+--- it is purely hand-managed. Errors (via `error()`) if the resulting config is
+--- invalid (e.g. interval >= sustainSeconds) without touching any previously-loaded
+--- config -- so a broken on-disk file can never disrupt already-running monitoring
+--- via `reloadConfig()`, only prevent a first-ever `start()`.
+function obj:loadConfig()
+	local disk = _readDiskConfig(self)
+	local candidate = _mergeConfigs(disk.config, self._luaConfig or {})
 
 	local ok, err = validateConfig(candidate)
 	if not ok then error("ProcessWatcher: invalid config at " .. self.configPath .. ": " .. err, 2) end
 	self._config = candidate
 
-	if parseFailed then
+	if disk.parseFailed then
 		self.log.w(
 			"Config file at "
 				.. self.configPath
 				.. " could not be parsed as JSON; leaving it on disk untouched "
 				.. "and using defaults in memory for this session"
 		)
-	else
-		self:saveConfig()
 	end
 	self.log.i("Config loaded from " .. self.configPath)
 	return self
 end
 
---- ProcessWatcher:saveConfig()
---- Method
---- Writes the current in-memory config to `configPath`.
-function obj:saveConfig()
-	local dir = string.match(self.configPath, "^(.*)/[^/]+$")
-	if dir then hs.fs.mkdir(dir) end
-	local ok = hs.json.write(self._config, self.configPath, true, true)
-	if ok then
-		self.log.i("Config saved to " .. self.configPath)
-	else
-		self.log.e("Failed to save config to " .. self.configPath)
-	end
-	return self
-end
-
 --- ProcessWatcher:configure(cfg)
 --- Method
---- Merges `cfg` into the current config, persists it, and restarts monitoring if running. Errors
---- (via `error()`) if the resulting config is invalid (e.g. interval >= sustainSeconds) without
---- applying or persisting any of it -- currently-running monitoring, if any, is left untouched.
+--- Merges `cfg` into the Lua-side config overlay and recomputes the effective
+--- config against the current on-disk `config.json`, restarting monitoring if
+--- running. Never writes `configPath` -- it is purely hand-managed; `cfg` values
+--- take effect in memory only and are reapplied on every subsequent loadConfig()/
+--- reloadConfig() call. Errors (via `error()`) if the resulting config is invalid
+--- (e.g. interval >= sustainSeconds) without applying any of it -- currently-running
+--- monitoring, if any, is left untouched.
 function obj:configure(cfg)
-	if not self._config then self:loadConfig() end
-	local candidate = hs.fnutils.copy(self._config)
-	for k, v in pairs(cfg or {}) do
-		if DEFAULT_CONFIG[k] ~= nil then candidate[k] = v end
-	end
+	local candidateLuaConfig = _mergeConfigs(self._luaConfig or {}, cfg or {})
+	local disk = _readDiskConfig(self)
+	local candidate = _mergeConfigs(disk.config, candidateLuaConfig)
 
 	local ok, err = validateConfig(candidate)
 	if not ok then error("ProcessWatcher: invalid config: " .. err, 2) end
+	self._luaConfig = candidateLuaConfig
 	self._config = candidate
 
-	self:saveConfig()
 	if self._running then
 		self:stop()
 		self:start()
