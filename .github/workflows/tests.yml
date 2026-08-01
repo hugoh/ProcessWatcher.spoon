@@ -12,4 +12,4 @@ on: # yamllint disable-line rule:truthy
 
 jobs:
   test:
-    uses: hugoh/spoon-tools/.github/workflows/spoon-tests.yml@c8b0b55d0856e5844ab3f6007d531a194543005a # v1.0.0
+    uses: hugoh/spoon-tools/.github/workflows/spoon-tests.yml@9b0196dd06b709ae53174c5075a06c7b948c5810 # v1.2.3
