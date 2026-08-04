@@ -24,9 +24,14 @@ obj.configPath = os.getenv("HOME") .. "/.config/ProcessWatcher/config.json"
 
 obj._menu = nil
 obj._timer = nil
+obj._wakeWatcher = nil
 obj._running = false
 obj._config = nil
 obj.log = hs.logger.new("ProcessWatcher", "info")
+
+-- Epoch seconds until which _evaluateMetric suppresses new leaky-bucket increments
+-- (0 = no active grace period). Set on hs.caffeinate.watcher's systemDidWake event.
+obj._graceUntil = 0
 
 -- Leaky-bucket sustain counters, keyed by metric ("cpu"/"mem") then process name.
 obj._counters = { cpu = {}, mem = {} }
@@ -47,6 +52,7 @@ local DEFAULT_CONFIG = {
 	sustainSeconds = 600, -- how long a process must stay over threshold before alerting
 	snoozeHours = 2, -- how long the notification's "Ignore" action suppresses alerts
 	terminateGraceSeconds = 20, -- wait after SIGTERM before escalating to SIGKILL
+	wakeGraceSeconds = 60, -- after system wake, suppress new sustain ticks for this long (0 disables)
 	topCount = 5, -- how many processes to show in the "Top CPU"/"Top Memory" menu sections
 	notify = true,
 	allowlist = {}, -- process names that are never flagged
@@ -68,6 +74,9 @@ local function validateConfig(cfg)
 	if type(cfg.interval) ~= "number" or cfg.interval <= 0 then return false, "interval must be a positive number" end
 	if type(cfg.sustainSeconds) ~= "number" or cfg.sustainSeconds <= 0 then
 		return false, "sustainSeconds must be a positive number"
+	end
+	if type(cfg.wakeGraceSeconds) ~= "number" or cfg.wakeGraceSeconds < 0 then
+		return false, "wakeGraceSeconds must be a non-negative number"
 	end
 	if cfg.interval >= cfg.sustainSeconds then
 		return false,
@@ -316,12 +325,14 @@ end
 -- Leaky bucket: a sample over threshold increments the counter (capped at `ticks`),
 -- a sample under threshold decrements it (floored at 0) rather than resetting to 0.
 -- This tolerates the brief dips a genuinely runaway process still has, instead of
--- wiping all accumulated progress on a single low sample.
+-- wiping all accumulated progress on a single low sample. During an active post-wake
+-- grace period (self._graceUntil), the increment branch is a no-op -- samples under
+-- threshold still decay the counter as usual.
 function obj:_evaluateMetric(name, metric, value, threshold, ticks, sustainSeconds, pids)
 	local counters = self._counters[metric]
 	local count = counters[name] or 0
 	if value >= threshold then
-		count = math.min(ticks, count + 1)
+		if os.time() >= self._graceUntil then count = math.min(ticks, count + 1) end
 	else
 		count = math.max(0, count - 1)
 	end
@@ -602,6 +613,13 @@ function obj:status()
 		end
 	end
 
+	if self._graceUntil > os.time() then
+		table.insert(
+			lines,
+			string.format("Post-wake grace: %ds remaining (new sustain ticks suppressed)", self._graceUntil - os.time())
+		)
+	end
+
 	local trackingLines = self:_trackingLines()
 	if #trackingLines > 0 then
 		table.insert(lines, "Tracking (not yet flagged):")
@@ -645,15 +663,29 @@ function obj:configSummary()
 	end
 	return string.format(
 		"interval=%.0fs cpuThreshold=%.0f%% memThreshold=%.0f%% sustainSeconds=%.0fs snoozeHours=%.0f "
-			.. "allowlist=[%s] overrides=[%s]",
+			.. "wakeGraceSeconds=%.0fs allowlist=[%s] overrides=[%s]",
 		c.interval,
 		c.cpuThreshold,
 		c.memThreshold,
 		c.sustainSeconds,
 		c.snoozeHours,
+		c.wakeGraceSeconds,
 		table.concat(c.allowlist, ","),
 		table.concat(overrideParts, ";")
 	)
+end
+
+-- Called on hs.caffeinate.watcher's systemDidWake event. Sets a grace-period deadline
+-- during which _evaluateMetric won't accumulate new sustain ticks, so the legitimate
+-- CPU/mem catch-up burst from background daemons (Spotlight, backupd, cloudd,
+-- WindowServer, softwareupdated, etc.) right after wake doesn't itself trip an alert.
+-- Under-threshold samples still decay counters as normal during the grace window, so
+-- a process that was already genuinely runaway before sleep can't use the window to
+-- freeze its progress indefinitely -- it just can't accumulate further for a bit.
+function obj:_onSystemWake()
+	if self._config.wakeGraceSeconds <= 0 then return end
+	self._graceUntil = os.time() + self._config.wakeGraceSeconds
+	self.log.i(string.format("System woke; suppressing new sustain ticks for %.0fs", self._config.wakeGraceSeconds))
 end
 
 --- ProcessWatcher:start()
@@ -663,6 +695,10 @@ function obj:start()
 	if not self._config then self:loadConfig() end
 	if self._timer then self:stop() end
 	self._menu = hs.menubar.new()
+	self._wakeWatcher = hs.caffeinate.watcher.new(function(eventType)
+		if eventType == hs.caffeinate.watcher.systemDidWake then self:_onSystemWake() end
+	end)
+	self._wakeWatcher:start()
 	if not hs.ipc then
 		self.log.w(
 			"hs.ipc is not loaded, so bin/processwatcher (the CLI) will not be able to "
@@ -691,6 +727,10 @@ function obj:stop()
 	if self._timer then
 		self._timer:stop()
 		self._timer = nil
+	end
+	if self._wakeWatcher then
+		self._wakeWatcher:stop()
+		self._wakeWatcher = nil
 	end
 	if self._menu then
 		self._menu:delete()

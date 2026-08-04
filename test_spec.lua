@@ -71,6 +71,11 @@ before_each(function()
 				return m
 			end,
 		},
+		caffeinate = {
+			watcher = {
+				systemDidWake = "systemDidWake",
+			},
+		},
 	}
 
 	mock_hs._opened = {}
@@ -109,6 +114,20 @@ before_each(function()
 		for _, t in ipairs(pending) do
 			t._fn()
 		end
+	end
+
+	mock_hs.caffeinate.watcher.new = function(fn)
+		local w = { _fn = fn, _started = false }
+		function w:start() self._started = true end
+		function w:stop() self._started = false end
+		mock_hs.caffeinate._lastWatcher = w
+		return w
+	end
+	-- Simulates hs.caffeinate.watcher firing an event (default: systemDidWake) on the
+	-- most recently created watcher, mirroring _fireTimers above.
+	mock_hs._fireCaffeinateEvent = function(eventType)
+		local w = mock_hs.caffeinate._lastWatcher
+		if w then w._fn(eventType or mock_hs.caffeinate.watcher.systemDidWake) end
 	end
 
 	mock_hs.notify._withdrawn = {}
@@ -466,6 +485,25 @@ describe("ProcessWatcher", function()
 			assert.is.table(ProcessWatcher._flagged["Hog"])
 			sample(0) -- one dip: counter goes from 10 to 9, still flagged
 			assert.is.table(ProcessWatcher._flagged["Hog"])
+		end)
+	end)
+
+	describe("wakeGraceSeconds validation", function()
+		it("configure() rejects a negative wakeGraceSeconds", function()
+			ProcessWatcher:loadConfig()
+			assert.has_error(function() ProcessWatcher:configure({ wakeGraceSeconds = -1 }) end)
+		end)
+
+		it("configure() accepts wakeGraceSeconds = 0 (disabled)", function()
+			ProcessWatcher:loadConfig()
+			assert.has_no.errors(function() ProcessWatcher:configure({ wakeGraceSeconds = 0 }) end)
+			assert.are.equal(0, ProcessWatcher._config.wakeGraceSeconds)
+		end)
+
+		it("configure() accepts a positive wakeGraceSeconds", function()
+			ProcessWatcher:loadConfig()
+			assert.has_no.errors(function() ProcessWatcher:configure({ wakeGraceSeconds = 120 }) end)
+			assert.are.equal(120, ProcessWatcher._config.wakeGraceSeconds)
 		end)
 	end)
 
@@ -938,6 +976,21 @@ describe("ProcessWatcher", function()
 			assert.truthy(s:find("Teams"))
 			assert.truthy(s:find("cpu=200%%"))
 		end)
+
+		it("configSummary includes wakeGraceSeconds", function()
+			local s = ProcessWatcher:configSummary()
+			assert.truthy(s:find("wakeGraceSeconds=60"))
+		end)
+
+		it("shows remaining post-wake grace time in status", function()
+			ProcessWatcher._graceUntil = os.time() + 45
+			assert.truthy(ProcessWatcher:status():find("Post%-wake grace:"))
+		end)
+
+		it(
+			"omits the post-wake grace line when no grace period is active",
+			function() assert.is_nil(ProcessWatcher:status():find("Post%-wake grace:")) end
+		)
 	end)
 
 	describe("start/stop lifecycle", function()
@@ -970,6 +1023,66 @@ describe("ProcessWatcher", function()
 			mock_hs.ipc = {}
 			ProcessWatcher:start()
 			assert.are.equal(0, #ProcessWatcher.log._warnings)
+		end)
+	end)
+
+	describe("wake grace period", function()
+		before_each(function()
+			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+		end)
+
+		it("creates and starts a caffeinate watcher on start", function()
+			ProcessWatcher:start()
+			assert.is.table(ProcessWatcher._wakeWatcher)
+			assert.is_true(ProcessWatcher._wakeWatcher._started)
+		end)
+
+		it("stops the caffeinate watcher on stop", function()
+			ProcessWatcher:start()
+			local w = ProcessWatcher._wakeWatcher
+			ProcessWatcher:stop()
+			assert.is_nil(ProcessWatcher._wakeWatcher)
+			assert.is_false(w._started)
+		end)
+
+		it("sets a grace deadline on systemDidWake", function()
+			ProcessWatcher:configure({ wakeGraceSeconds = 60 })
+			ProcessWatcher:start()
+			local before = os.time()
+			mock_hs._fireCaffeinateEvent()
+			assert.is_true(ProcessWatcher._graceUntil >= before + 60)
+		end)
+
+		it("does not set a grace deadline when wakeGraceSeconds is 0 (disabled)", function()
+			ProcessWatcher:configure({ wakeGraceSeconds = 0 })
+			ProcessWatcher:start()
+			mock_hs._fireCaffeinateEvent()
+			assert.are.equal(0, ProcessWatcher._graceUntil)
+		end)
+
+		it("suppresses new sustain ticks for an over-threshold sample during grace", function()
+			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
+			ProcessWatcher._graceUntil = os.time() + 60
+			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
+			ProcessWatcher:_sample()
+			assert.are.equal(0, ProcessWatcher._counters.cpu["Chrome"] or 0)
+		end)
+
+		it("still decays counters for an under-threshold sample during grace", function()
+			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
+			ProcessWatcher._counters.cpu["Chrome"] = 3
+			ProcessWatcher._graceUntil = os.time() + 60
+			mock_hs._setExecHandler(function(_cmd) return "111  10.0  10.0 Chrome\n", true, "exit", 0 end)
+			ProcessWatcher:_sample()
+			assert.are.equal(2, ProcessWatcher._counters.cpu["Chrome"])
+		end)
+
+		it("resumes accumulating ticks once the grace period has elapsed", function()
+			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
+			ProcessWatcher._graceUntil = os.time() - 1
+			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
+			ProcessWatcher:_sample()
+			assert.are.equal(1, ProcessWatcher._counters.cpu["Chrome"])
 		end)
 	end)
 end)
