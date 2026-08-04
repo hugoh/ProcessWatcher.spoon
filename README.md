@@ -62,6 +62,7 @@ hs.loadSpoon("ProcessWatcher"):configure({
   sustainSeconds = 600,        -- how long a process must stay over threshold before alerting
   snoozeHours = 2,             -- how long the notification's "Ignore" action suppresses alerts
   terminateGraceSeconds = 2,   -- wait after SIGTERM before escalating to SIGKILL
+  wakeGraceSeconds = 60,       -- after system wake, suppress new sustain ticks for this long (0 disables)
   topCount = 5,                -- how many processes to show in the "Top CPU"/"Top Memory" sections
   notify = true,               -- whether to send a notification when a process is flagged
   allowlist = { "Xcode", "ffmpeg" },
@@ -72,6 +73,8 @@ hs.loadSpoon("ProcessWatcher"):configure({
 ```
 
 `interval` must be strictly less than `sustainSeconds`, and both must be positive — otherwise a process could flag on the very first over-threshold sample and clear on the very next low one, with none of the intended dip-tolerance. An invalid config (from Lua or a hand-edited `config.json`) raises an error and leaves your current settings and any running monitoring untouched.
+
+After the Mac wakes from sleep, background daemons (Spotlight's `mds_stores`, `backupd`, `cloudd`, `WindowServer`, `softwareupdated`, etc.) commonly do legitimate catch-up work that pegs CPU for a while. `wakeGraceSeconds` suppresses new sustain-tick accumulation for that long after each wake (set to `0` to disable) so that burst doesn't itself trip an alert; it doesn't reset any progress already accumulated, and samples that fall back under threshold during the window still decay normally.
 
 ### Per-process overrides
 
