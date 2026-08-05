@@ -838,15 +838,47 @@ describe("ProcessWatcher", function()
 			assert.is_true(found)
 		end)
 
-		it("Edit Config item calls hs.open with configPath", function()
+		it("shows the same dot-bar progress text as the CLI for a flagged process", function()
+			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5 })
+			ProcessWatcher._flagged["Bad"] = { since = os.time(), cpu = true, cpu_value = 99, pids = { "1" } }
+			ProcessWatcher._counters.cpu["Bad"] = 3
 			ProcessWatcher:_updateMenu()
-			local editItem
+			local found = false
 			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
-				if item.title and item.title:find("Edit Config") then editItem = item end
+				if item.title and item.title:find("CPU 99%% ●●●○○ 3/5 ticks to clear") then found = true end
 			end
-			assert.is.table(editItem)
-			editItem.fn()
-			assert.are.equal(ProcessWatcher.configPath, mock_hs._opened[1])
+			assert.is_true(found)
+		end)
+
+		it("shows a Tracking section using the same lines as the CLI's status()", function()
+			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
+			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
+			ProcessWatcher:_sample()
+			local found = false
+			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
+				if item.title and item.title:find("Chrome: CPU ●○○○○ 1/5 ticks %(80%%%)") then
+					found = true
+				end
+			end
+			assert.is_true(found)
+		end)
+
+		it("omits the Tracking section when nothing is accumulating", function()
+			ProcessWatcher:_updateMenu()
+			local found = false
+			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
+				if item.title == "Tracking" then found = true end
+			end
+			assert.is_false(found)
+		end)
+
+		it("no longer offers Edit Config", function()
+			ProcessWatcher:_updateMenu()
+			local found = false
+			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
+				if item.title and item.title:find("Edit Config") then found = true end
+			end
+			assert.is_false(found)
 		end)
 	end)
 
@@ -870,19 +902,21 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("shows the leaky-bucket decay progress for a flagged metric", function()
+			ProcessWatcher:configure({ interval = 1, sustainSeconds = 7 })
 			ProcessWatcher._flagged["Bad"] = { since = os.time(), cpu = true, cpu_value = 99, pids = { "1" } }
 			ProcessWatcher._counters.cpu["Bad"] = 7
-			assert.truthy(ProcessWatcher:status():find("CPU 99%% %[7 ticks to clear%]"))
+			assert.truthy(ProcessWatcher:status():find("CPU 99%% ●●●●● 7/7 ticks to clear"))
 		end)
 
 		it("shows decay progress for both metrics when a process is flagged on cpu and mem", function()
+			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5 })
 			ProcessWatcher._flagged["Bad"] =
 				{ since = os.time(), cpu = true, cpu_value = 99, mem = true, mem_value = 40, pids = { "1" } }
 			ProcessWatcher._counters.cpu["Bad"] = 3
 			ProcessWatcher._counters.mem["Bad"] = 5
 			local s = ProcessWatcher:status()
-			assert.truthy(s:find("CPU 99%% %[3 ticks to clear%]"))
-			assert.truthy(s:find("Mem 40%% %[5 ticks to clear%]"))
+			assert.truthy(s:find("CPU 99%% ●●●○○ 3/5 ticks to clear"))
+			assert.truthy(s:find("Mem 40%% ●●●●● 5/5 ticks to clear"))
 		end)
 
 		it("shows top CPU/memory processes once a sample has been taken", function()
@@ -915,7 +949,7 @@ describe("ProcessWatcher", function()
 			ProcessWatcher:_sample() -- one over-threshold sample: counter 1/5, not yet flagged
 			local s = ProcessWatcher:status()
 			assert.truthy(s:find("Tracking %(not yet flagged%):"))
-			assert.truthy(s:find("Chrome: CPU 1/5 ticks %(80%%%)"))
+			assert.truthy(s:find("Chrome: CPU ●○○○○ 1/5 ticks %(80%%%)"))
 			assert.is_nil(ProcessWatcher._flagged["Chrome"])
 		end)
 
@@ -940,7 +974,9 @@ describe("ProcessWatcher", function()
 			mock_hs._setExecHandler(function(_cmd) return "111  80.0  80.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			local s = ProcessWatcher:status()
-			assert.truthy(s:find("Chrome: CPU 1/5 ticks %(80%%%), Mem 1/5 ticks %(80%%%)"))
+			assert.truthy(
+				s:find("Chrome: CPU ●○○○○ 1/5 ticks %(80%%%), Mem ●○○○○ 1/5 ticks %(80%%%)")
+			)
 		end)
 
 		it("sorts Tracking entries by proximity to flagging, closest first", function()

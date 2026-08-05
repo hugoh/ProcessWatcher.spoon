@@ -466,6 +466,42 @@ function obj:_topProcesses()
 	return trim(byCpu), trim(byMem)
 end
 
+local TICK_BAR_WIDTH = 5
+
+-- Renders a leaky-bucket counter as a fixed-width dot bar, e.g. "●●●○○".
+local function tickBar(count, ticksRequired)
+	local filled = math.floor((count / math.max(1, ticksRequired)) * TICK_BAR_WIDTH + 0.5)
+	filled = math.max(0, math.min(TICK_BAR_WIDTH, filled))
+	return string.rep("●", filled) .. string.rep("○", TICK_BAR_WIDTH - filled)
+end
+
+-- Builds the per-metric progress strings for a flagged process, e.g.
+-- "CPU 99% ●●●○○ 3/5 ticks to clear" -- shared by status() and the menu bar so
+-- both surfaces render identically.
+function obj:_flaggedParts(name)
+	local f = self._flagged[name]
+	local ticksRequired = self:_sustainTicks(self:_thresholdsFor(name).sustainSeconds)
+	local parts = {}
+	for _, m in ipairs({ "cpu", "mem" }) do
+		if f[m] then
+			local count = self._counters[m][name] or 0
+			local label = m == "cpu" and "CPU" or "Mem"
+			table.insert(
+				parts,
+				string.format(
+					"%s %.0f%% %s %d/%d ticks to clear",
+					label,
+					f[m .. "_value"] or 0,
+					tickBar(count, ticksRequired),
+					count,
+					ticksRequired
+				)
+			)
+		end
+	end
+	return parts
+end
+
 function obj:_updateMenu()
 	if not self._menu then return end
 
@@ -479,12 +515,8 @@ function obj:_updateMenu()
 	if #flaggedNames > 0 then
 		table.insert(menu, { title = "Flagged", disabled = true })
 		for _, name in ipairs(flaggedNames) do
-			local f = self._flagged[name]
-			local parts = {}
-			if f.cpu then table.insert(parts, string.format("CPU %.0f%%", f.cpu_value or 0)) end
-			if f.mem then table.insert(parts, string.format("Mem %.0f%%", f.mem_value or 0)) end
 			table.insert(menu, {
-				title = string.format("  %s (%s)", name, table.concat(parts, ", ")),
+				title = string.format("  %s (%s)", name, table.concat(self:_flaggedParts(name), ", ")),
 				menu = {
 					{ title = "Terminate", fn = function() self:kill(name) end },
 					{
@@ -493,6 +525,15 @@ function obj:_updateMenu()
 					},
 				},
 			})
+		end
+		table.insert(menu, { title = "-" })
+	end
+
+	local trackingLines = self:_trackingLines()
+	if #trackingLines > 0 then
+		table.insert(menu, { title = "Tracking", disabled = true })
+		for _, line in ipairs(trackingLines) do
+			table.insert(menu, { title = line })
 		end
 		table.insert(menu, { title = "-" })
 	end
@@ -506,9 +547,6 @@ function obj:_updateMenu()
 	for _, e in ipairs(topMem) do
 		table.insert(menu, { title = string.format("  %s — %.0f%%", e.name, e.mem) })
 	end
-
-	table.insert(menu, { title = "-" })
-	table.insert(menu, { title = "Edit Config…", fn = function() self:openConfig() end })
 
 	self._menu:setMenu(menu)
 	self._menu:setTitle(#flaggedNames > 0 and "🌡️!" or "🌡️")
@@ -555,7 +593,17 @@ function obj:_trackingLines()
 					if c > 0 then
 						local value = sample and sample[m] or 0
 						local label = m == "cpu" and "CPU" or "Mem"
-						table.insert(parts, string.format("%s %d/%d ticks (%.0f%%)", label, c, ticksRequired, value))
+						table.insert(
+							parts,
+							string.format(
+								"%s %s %d/%d ticks (%.0f%%)",
+								label,
+								tickBar(c, ticksRequired),
+								c,
+								ticksRequired,
+								value
+							)
+						)
 						maxRatio = math.max(maxRatio, c / ticksRequired)
 					end
 				end
@@ -591,19 +639,7 @@ function obj:status()
 		for _, name in ipairs(names) do
 			local f = self._flagged[name]
 			local elapsed = now - f.since
-			local parts = {}
-			if f.cpu then
-				table.insert(
-					parts,
-					string.format("CPU %.0f%% [%d ticks to clear]", f.cpu_value or 0, self._counters.cpu[name] or 0)
-				)
-			end
-			if f.mem then
-				table.insert(
-					parts,
-					string.format("Mem %.0f%% [%d ticks to clear]", f.mem_value or 0, self._counters.mem[name] or 0)
-				)
-			end
+			local parts = self:_flaggedParts(name)
 			table.insert(
 				lines,
 				string.format(
