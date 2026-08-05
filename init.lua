@@ -234,11 +234,11 @@ function obj:_thresholdsFor(name)
 	return { cpuThreshold = cfg.cpuThreshold, memThreshold = cfg.memThreshold, sustainSeconds = cfg.sustainSeconds }
 end
 
-function obj:_isExcluded(name)
+function obj:_isExcluded(name, now)
 	if hs.fnutils.contains(self._config.allowlist, name) then return true end
 	local expiry = self._snooze[name]
 	if expiry then
-		if expiry > os.time() then return true end
+		if expiry > now then return true end
 		self._snooze[name] = nil
 	end
 	return false
@@ -328,11 +328,11 @@ end
 -- wiping all accumulated progress on a single low sample. During an active post-wake
 -- grace period (self._graceUntil), the increment branch is a no-op -- samples under
 -- threshold still decay the counter as usual.
-function obj:_evaluateMetric(name, metric, value, threshold, ticks, sustainSeconds, pids)
+function obj:_evaluateMetric(name, metric, value, threshold, ticks, sustainSeconds, pids, now)
 	local counters = self._counters[metric]
 	local count = counters[name] or 0
 	if value >= threshold then
-		if os.time() >= self._graceUntil then count = math.min(ticks, count + 1) end
+		if now >= self._graceUntil then count = math.min(ticks, count + 1) end
 	else
 		count = math.max(0, count - 1)
 	end
@@ -346,6 +346,8 @@ function obj:_evaluateMetric(name, metric, value, threshold, ticks, sustainSecon
 end
 
 function obj:_evaluate(byName)
+	local now = os.time()
+
 	for _, metric in ipairs({ "cpu", "mem" }) do
 		for name in pairs(self._counters[metric]) do
 			if not byName[name] then
@@ -356,15 +358,15 @@ function obj:_evaluate(byName)
 	end
 
 	for name, data in pairs(byName) do
-		if self:_isExcluded(name) then
+		if self:_isExcluded(name, now) then
 			self._counters.cpu[name] = nil
 			self._counters.mem[name] = nil
 			self:_clearFlag(name)
 		else
 			local t = self:_thresholdsFor(name)
 			local ticks = self:_sustainTicks(t.sustainSeconds)
-			self:_evaluateMetric(name, "cpu", data.cpu, t.cpuThreshold, ticks, t.sustainSeconds, data.pids)
-			self:_evaluateMetric(name, "mem", data.mem, t.memThreshold, ticks, t.sustainSeconds, data.pids)
+			self:_evaluateMetric(name, "cpu", data.cpu, t.cpuThreshold, ticks, t.sustainSeconds, data.pids, now)
+			self:_evaluateMetric(name, "mem", data.mem, t.memThreshold, ticks, t.sustainSeconds, data.pids, now)
 		end
 	end
 end
@@ -573,6 +575,8 @@ function obj:_trackingLines()
 end
 
 function obj:status()
+	local now = os.time()
+
 	local names = {}
 	for name in pairs(self._flagged) do
 		table.insert(names, name)
@@ -586,7 +590,7 @@ function obj:status()
 		table.insert(lines, "Flagged:")
 		for _, name in ipairs(names) do
 			local f = self._flagged[name]
-			local elapsed = os.time() - f.since
+			local elapsed = now - f.since
 			local parts = {}
 			if f.cpu then
 				table.insert(
@@ -613,10 +617,10 @@ function obj:status()
 		end
 	end
 
-	if self._graceUntil > os.time() then
+	if self._graceUntil > now then
 		table.insert(
 			lines,
-			string.format("Post-wake grace: %ds remaining (new sustain ticks suppressed)", self._graceUntil - os.time())
+			string.format("Post-wake grace: %ds remaining (new sustain ticks suppressed)", self._graceUntil - now)
 		)
 	end
 
