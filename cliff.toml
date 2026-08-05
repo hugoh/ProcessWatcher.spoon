@@ -16,6 +16,7 @@ filter_unconventional = true
 commit_parsers = [
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
   { message = "^chore|^ci|^refactor|^docs", skip = true },
 ]
 tag_pattern = "v[0-9].*"
