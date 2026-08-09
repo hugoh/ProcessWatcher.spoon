@@ -74,6 +74,7 @@ before_each(function()
 		caffeinate = {
 			watcher = {
 				systemDidWake = "systemDidWake",
+				systemWillSleep = "systemWillSleep",
 			},
 		},
 	}
@@ -1119,6 +1120,70 @@ describe("ProcessWatcher", function()
 			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			assert.are.equal(1, ProcessWatcher._counters.cpu["Chrome"])
+		end)
+
+		it("partially decays sustain counters proportional to a short sleep", function()
+			ProcessWatcher:configure({ interval = 30, sustainSeconds = 600, wakeGraceSeconds = 60 })
+			ProcessWatcher:start()
+			ProcessWatcher._counters.cpu["Chrome"] = 15
+			mock_hs._fireCaffeinateEvent(mock_hs.caffeinate.watcher.systemWillSleep)
+			ProcessWatcher._sleepStartedAt = os.time() - 90 -- 3 missed 30s intervals
+			mock_hs._fireCaffeinateEvent()
+			assert.are.equal(12, ProcessWatcher._counters.cpu["Chrome"])
+		end)
+
+		it("decays a sustain counter to 0 (floored) across a long sleep", function()
+			ProcessWatcher:configure({ interval = 30, sustainSeconds = 600, wakeGraceSeconds = 60 })
+			ProcessWatcher:start()
+			ProcessWatcher._counters.cpu["Chrome"] = 15
+			mock_hs._fireCaffeinateEvent(mock_hs.caffeinate.watcher.systemWillSleep)
+			ProcessWatcher._sleepStartedAt = os.time() - 1200 -- 40 missed intervals >> 15
+			mock_hs._fireCaffeinateEvent()
+			assert.is_nil(ProcessWatcher._counters.cpu["Chrome"])
+		end)
+
+		it("unflags a process (and withdraws its notification) whose counter decays to 0 across sleep", function()
+			ProcessWatcher:configure({ interval = 30, sustainSeconds = 600, wakeGraceSeconds = 60 })
+			ProcessWatcher:start()
+			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
+			ProcessWatcher._counters.cpu["Bad"] = ProcessWatcher:_sustainTicks()
+			ProcessWatcher:_flag("Bad", "cpu", 99, ProcessWatcher._config.sustainSeconds, { "1" })
+			assert.is.table(ProcessWatcher._flagged["Bad"])
+			mock_hs._fireCaffeinateEvent(mock_hs.caffeinate.watcher.systemWillSleep)
+			ProcessWatcher._sleepStartedAt = os.time() - 1200
+			mock_hs._fireCaffeinateEvent()
+			assert.is_nil(ProcessWatcher._flagged["Bad"])
+			assert.are.equal(1, #mock_hs.notify._withdrawn)
+		end)
+
+		it("clears counters on wake when no sleep start was recorded (unknown duration is treated as stale)", function()
+			ProcessWatcher:configure({ interval = 30, sustainSeconds = 600, wakeGraceSeconds = 60 })
+			ProcessWatcher:start()
+			ProcessWatcher._counters.cpu["Chrome"] = 15
+			mock_hs._fireCaffeinateEvent() -- systemDidWake with no prior systemWillSleep
+			assert.is_nil(ProcessWatcher._counters.cpu["Chrome"])
+		end)
+
+		it("still sets the grace deadline on wake after decaying counters", function()
+			ProcessWatcher:configure({ interval = 30, sustainSeconds = 600, wakeGraceSeconds = 60 })
+			ProcessWatcher:start()
+			ProcessWatcher._counters.cpu["Chrome"] = 15
+			mock_hs._fireCaffeinateEvent(mock_hs.caffeinate.watcher.systemWillSleep)
+			ProcessWatcher._sleepStartedAt = os.time() - 90
+			local before = os.time()
+			mock_hs._fireCaffeinateEvent()
+			assert.is_true(ProcessWatcher._graceUntil >= before + 60)
+		end)
+
+		it("still decays counters on wake when wakeGraceSeconds is 0 (disabled)", function()
+			ProcessWatcher:configure({ interval = 30, sustainSeconds = 600, wakeGraceSeconds = 0 })
+			ProcessWatcher:start()
+			ProcessWatcher._counters.cpu["Chrome"] = 15
+			mock_hs._fireCaffeinateEvent(mock_hs.caffeinate.watcher.systemWillSleep)
+			ProcessWatcher._sleepStartedAt = os.time() - 90
+			mock_hs._fireCaffeinateEvent()
+			assert.are.equal(12, ProcessWatcher._counters.cpu["Chrome"])
+			assert.are.equal(0, ProcessWatcher._graceUntil)
 		end)
 	end)
 end)

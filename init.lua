@@ -33,6 +33,10 @@ obj.log = hs.logger.new("ProcessWatcher", "info")
 -- (0 = no active grace period). Set on hs.caffeinate.watcher's systemDidWake event.
 obj._graceUntil = 0
 
+-- Epoch seconds when systemWillSleep last fired (nil if not currently known/tracked),
+-- used by _onSystemWake to decay counters by the number of intervals actually missed.
+obj._sleepStartedAt = nil
+
 -- Leaky-bucket sustain counters, keyed by metric ("cpu"/"mem") then process name.
 obj._counters = { cpu = {}, mem = {} }
 -- Currently-flagged names -> { since=, cpu=bool, cpu_value=, mem=bool, mem_value=, pids={} }.
@@ -715,14 +719,59 @@ function obj:configSummary()
 	)
 end
 
--- Called on hs.caffeinate.watcher's systemDidWake event. Sets a grace-period deadline
--- during which _evaluateMetric won't accumulate new sustain ticks, so the legitimate
--- CPU/mem catch-up burst from background daemons (Spotlight, backupd, cloudd,
--- WindowServer, softwareupdated, etc.) right after wake doesn't itself trip an alert.
--- Under-threshold samples still decay counters as normal during the grace window, so
--- a process that was already genuinely runaway before sleep can't use the window to
--- freeze its progress indefinitely -- it just can't accumulate further for a bit.
+-- Called on hs.caffeinate.watcher's systemWillSleep event. Records when sleep started so
+-- _onSystemWake can tell how long the system was actually asleep -- while asleep, timers
+-- don't fire, so leaky-bucket counters would otherwise sit frozen mid-flight rather than
+-- decaying, letting stale pre-sleep progress count toward a "sustained" alert after wake.
+function obj:_onSystemSleep() self._sleepStartedAt = os.time() end
+
+-- Called on hs.caffeinate.watcher's systemDidWake event. Two independent things happen here:
+--
+-- 1. Decay: every leaky-bucket counter is decremented by the number of sample intervals
+--    missed while asleep (floored at 0, unflagging any that reach it), the same as if that
+--    many ordinary under-threshold samples had occurred. This treats the sleep gap as a
+--    break in continuity rather than silently preserving pre-sleep progress: a brief nap
+--    barely dents a counter, a long sleep drives it to 0. If no systemWillSleep was recorded
+--    (e.g. the Spoon started mid-sleep), the sleep duration is unknown, so counters are left
+--    untouched rather than guessed at.
+-- 2. Grace period: sets a deadline during which _evaluateMetric won't accumulate new sustain
+--    ticks, so the legitimate CPU/mem catch-up burst from background daemons (Spotlight,
+--    backupd, cloudd, WindowServer, softwareupdated, etc.) right after wake doesn't itself
+--    trip an alert. Under-threshold samples still decay counters as normal during the grace
+--    window. This is independent of decay above -- it applies even when wakeGraceSeconds
+--    is 0 (grace disabled).
+--
+-- If systemWillSleep wasn't recorded (missed event, or the Spoon/watcher was (re)started
+-- while already asleep), the sleep duration is unknown -- but getting systemDidWake at all
+-- still means a sleep happened, so treat this as the maximally-stale case and clear every
+-- counter outright rather than leaving (potentially very old) progress untouched.
 function obj:_onSystemWake()
+	local sleptSeconds = self._sleepStartedAt and (os.time() - self._sleepStartedAt) or nil
+	self._sleepStartedAt = nil
+
+	for _, metric in ipairs({ "cpu", "mem" }) do
+		for name, count in pairs(self._counters[metric]) do
+			local decayed = sleptSeconds and math.max(0, count - math.floor(sleptSeconds / self._config.interval)) or 0
+			if decayed == 0 then
+				self._counters[metric][name] = nil
+				self:_unflag(name, metric)
+			else
+				self._counters[metric][name] = decayed
+			end
+		end
+	end
+	if sleptSeconds then
+		self.log.i(
+			string.format(
+				"System woke after %.0fs asleep; decayed sustain counters by %d ticks",
+				sleptSeconds,
+				math.floor(sleptSeconds / self._config.interval)
+			)
+		)
+	else
+		self.log.i("System woke with unknown sleep duration; sustain counters cleared")
+	end
+
 	if self._config.wakeGraceSeconds <= 0 then return end
 	self._graceUntil = os.time() + self._config.wakeGraceSeconds
 	self.log.i(string.format("System woke; suppressing new sustain ticks for %.0fs", self._config.wakeGraceSeconds))
@@ -736,7 +785,11 @@ function obj:start()
 	if self._timer then self:stop() end
 	self._menu = hs.menubar.new()
 	self._wakeWatcher = hs.caffeinate.watcher.new(function(eventType)
-		if eventType == hs.caffeinate.watcher.systemDidWake then self:_onSystemWake() end
+		if eventType == hs.caffeinate.watcher.systemWillSleep then
+			self:_onSystemSleep()
+		elseif eventType == hs.caffeinate.watcher.systemDidWake then
+			self:_onSystemWake()
+		end
 	end)
 	self._wakeWatcher:start()
 	if not hs.ipc then
