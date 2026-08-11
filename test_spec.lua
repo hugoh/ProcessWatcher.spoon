@@ -66,9 +66,25 @@ before_each(function()
 			new = function()
 				local m = {}
 				function m:setTitle(t) self._title = t end
+				function m:setIcon(icon) self._icon = icon end
 				function m:setMenu(items) self._menuItems = items end
 				function m:delete() self._deleted = true end
 				return m
+			end,
+		},
+		canvas = {
+			new = function(rect)
+				local c = { _rect = rect }
+				function c.imageFromCanvas()
+					local img = { _isTemplate = false }
+					function img:template(state)
+						self._isTemplate = state
+						return self
+					end
+					return img
+				end
+				function c:delete() self._deleted = true end
+				return c
 			end,
 		},
 		caffeinate = {
@@ -821,17 +837,21 @@ describe("ProcessWatcher", function()
 		before_each(function()
 			ProcessWatcher:loadConfig()
 			ProcessWatcher._menu = mock_hs.menubar.new()
+			ProcessWatcher:_loadIcon()
 		end)
 
-		it("shows the plain icon with no flagged processes", function()
+		it("shows the black-and-white template icon with no flagged processes", function()
 			ProcessWatcher:_updateMenu()
-			assert.are.equal("🌡️", ProcessWatcher._menu._title)
+			assert.is_nil(ProcessWatcher._menu._title)
+			assert.are.equal(ProcessWatcher._icon, ProcessWatcher._menu._icon)
+			assert.is_true(ProcessWatcher._menu._icon._isTemplate)
 		end)
 
 		it("shows the alert icon and a Flagged section when something is flagged", function()
 			ProcessWatcher._flagged["Bad"] = { since = os.time(), cpu = true, cpu_value = 99, pids = { "1" } }
 			ProcessWatcher:_updateMenu()
 			assert.are.equal("🌡️!", ProcessWatcher._menu._title)
+			assert.is_nil(ProcessWatcher._menu._icon)
 			local found = false
 			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
 				if item.title and item.title:find("Bad") then found = true end
