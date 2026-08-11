@@ -23,6 +23,7 @@ obj.homepage = "https://github.com/hugoh/ProcessWatcher.spoon"
 obj.configPath = os.getenv("HOME") .. "/.config/ProcessWatcher/config.json"
 
 obj._menu = nil
+obj._icon = nil
 obj._timer = nil
 obj._wakeWatcher = nil
 obj._running = false
@@ -506,6 +507,25 @@ function obj:_flaggedParts(name)
 	return parts
 end
 
+-- Renders the 🌡️ glyph to an hs.image and marks it as a template image, so the menu bar
+-- shows it in monochrome (black/white, auto-adapting to the light/dark menu bar) when
+-- nothing is flagged: template images are tinted from their alpha shape alone, ignoring
+-- the glyph's actual color.
+function obj:_loadIcon()
+	local size = 18
+	local canvas = hs.canvas.new({ x = 0, y = 0, w = size, h = size })
+	canvas[1] = {
+		type = "text",
+		text = "🌡️",
+		textSize = size - 4,
+		textAlignment = "center",
+		frame = { x = 0, y = 0, w = size, h = size },
+	}
+	self._icon = canvas:imageFromCanvas()
+	canvas:delete()
+	self._icon:template(true)
+end
+
 function obj:_updateMenu()
 	if not self._menu then return end
 
@@ -553,7 +573,13 @@ function obj:_updateMenu()
 	end
 
 	self._menu:setMenu(menu)
-	self._menu:setTitle(#flaggedNames > 0 and "🌡️!" or "🌡️")
+	if #flaggedNames > 0 then
+		self._menu:setIcon(nil)
+		self._menu:setTitle("🌡️!")
+	else
+		self._menu:setIcon(self._icon)
+		self._menu:setTitle(nil)
+	end
 end
 
 function obj:_sample()
@@ -784,6 +810,7 @@ function obj:start()
 	if not self._config then self:loadConfig() end
 	if self._timer then self:stop() end
 	self._menu = hs.menubar.new()
+	self:_loadIcon()
 	self._wakeWatcher = hs.caffeinate.watcher.new(function(eventType)
 		if eventType == hs.caffeinate.watcher.systemWillSleep then
 			self:_onSystemSleep()
