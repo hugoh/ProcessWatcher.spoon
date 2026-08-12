@@ -131,4 +131,4 @@ ProcessWatcher samples processes by shelling out to `/bin/ps` and terminates the
 
 ## API documentation
 
-Full API reference is available at **<https://hugoh.github.io/ProcessWatcher.spoon/>**.
+Full API reference is available at **<https://processwatcher-spoon.larve.net/>**.
