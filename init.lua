@@ -749,7 +749,18 @@ end
 -- _onSystemWake can tell how long the system was actually asleep -- while asleep, timers
 -- don't fire, so leaky-bucket counters would otherwise sit frozen mid-flight rather than
 -- decaying, letting stale pre-sleep progress count toward a "sustained" alert after wake.
-function obj:_onSystemSleep() self._sleepStartedAt = os.time() end
+--
+-- Also withdraws any still-outstanding notifications: a delivered-but-unactioned alert would
+-- otherwise sit in Notification Center across the sleep and read as "flagged right on wake"
+-- when it was really about a pre-sleep spike. Flagged/counter state is left untouched -- the
+-- menu bar still reflects it, and it resolves normally via the leaky bucket/wake grace period.
+function obj:_onSystemSleep()
+	self._sleepStartedAt = os.time()
+	for name, f in pairs(self._flagged) do
+		if f.cpu then self:_withdrawNotification(name, "cpu") end
+		if f.mem then self:_withdrawNotification(name, "mem") end
+	end
+end
 
 -- Called on hs.caffeinate.watcher's systemDidWake event. Two independent things happen here:
 --

@@ -1176,6 +1176,19 @@ describe("ProcessWatcher", function()
 			assert.are.equal(1, #mock_hs.notify._withdrawn)
 		end)
 
+		it("withdraws pending notifications on systemWillSleep (silences stale pre-sleep alerts)", function()
+			ProcessWatcher:configure({ interval = 30, sustainSeconds = 600, wakeGraceSeconds = 60 })
+			ProcessWatcher:start()
+			ProcessWatcher:_flag("Bad", "cpu", 99, ProcessWatcher._config.sustainSeconds, { "1" })
+			assert.are.equal(1, #mock_hs.notify._sent)
+			assert.are.equal(0, #mock_hs.notify._withdrawn)
+			mock_hs._fireCaffeinateEvent(mock_hs.caffeinate.watcher.systemWillSleep)
+			assert.are.equal(1, #mock_hs.notify._withdrawn)
+			-- Internal flagged state is left intact -- only the OS notification banner is silenced,
+			-- so the menu bar/status still reflect it, and it resolves normally via the leaky bucket.
+			assert.is.table(ProcessWatcher._flagged["Bad"])
+		end)
+
 		it("clears counters on wake when no sleep start was recorded (unknown duration is treated as stale)", function()
 			ProcessWatcher:configure({ interval = 30, sustainSeconds = 600, wakeGraceSeconds = 60 })
 			ProcessWatcher:start()
