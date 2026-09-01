@@ -1,6 +1,3 @@
--- luacheck: std +busted
--- luacheck: globals hs
--- luacheck: globals assert (are (equal same) is_true is_nil)
 -- Busted tests for ProcessWatcher Spoon using a mock hs environment.
 
 local mock_hs

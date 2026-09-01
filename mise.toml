@@ -10,6 +10,7 @@ shellcheck = "0.11.0"
 "aqua:anordal/shellharden" = "4.3.2"
 shfmt = "3.14.0"
 lua = "5.4"
+"aqua:Kampfkarren/selene" = "0.31.0"
 rumdl = "0.2.62"
 stylua = "2.5.2"
 tombi = "1.5.0"
@@ -40,7 +41,4 @@ description = "Build a self-contained ProcessWatcher.spoon.zip (includes docs.js
 run = "busted test_spec.lua --verbose"
 
 [hooks]
-postinstall = ["luarocks install busted", "luarocks install luacheck"]
-
-[settings]
-experimental = true
+postinstall = ["luarocks install busted"]

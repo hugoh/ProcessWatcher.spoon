@@ -1,0 +1,7 @@
+std = "hammerspoon"
+
+[lints]
+# stylua keeps guard clauses like `if not ok then return end` on one line.
+multiple_statements = "allow"
+# Tests stub Hammerspoon's global `hs` table by assigning to _G directly.
+global_usage = "allow"
