@@ -816,10 +816,9 @@ end
 
 --- ProcessWatcher:init()
 --- Method
---- Called automatically by `hs.loadSpoon()`. Logs the loaded version and builds the static menu bar icon.
+--- Called automatically by `hs.loadSpoon()`. Logs the loaded version.
 function obj:init()
 	self.log.f("Loaded %s v%s", self.name, self.version)
-	self:_loadIcon()
 	return self
 end
 
@@ -830,6 +829,7 @@ function obj:start()
 	if not self._config then self:loadConfig() end
 	if self._timer then self:stop() end
 	self._menu = hs.menubar.new()
+	self:_loadIcon()
 	self._wakeWatcher = hs.caffeinate.watcher.new(function(eventType)
 		if eventType == hs.caffeinate.watcher.systemWillSleep then
 			self:_onSystemSleep()
