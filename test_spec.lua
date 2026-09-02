@@ -1065,6 +1065,18 @@ describe("ProcessWatcher", function()
 			assert.is_false(ProcessWatcher._running)
 		end)
 
+		it("rebuilds the menu bar icon on start so a CLI reload (stop/start) keeps it visible", function()
+			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			ProcessWatcher:init()
+			local iconFromInit = ProcessWatcher._icon
+			ProcessWatcher:start()
+			ProcessWatcher:stop()
+			ProcessWatcher:start()
+			assert.are_not.equal(iconFromInit, ProcessWatcher._icon)
+			assert.are.equal(ProcessWatcher._icon, ProcessWatcher._menu._icon)
+			assert.is_true(ProcessWatcher._menu._icon._isTemplate)
+		end)
+
 		it("warns on start if hs.ipc is not loaded (CLI would silently fail)", function()
 			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
 			mock_hs.ipc = nil
