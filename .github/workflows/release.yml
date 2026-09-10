@@ -7,18 +7,25 @@ permissions:
 
 on: # yamllint disable-line rule:truthy
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       tag:
         description: Tag to release (used to backfill a missed release; leave empty for normal use)
         required: false
         type: string
+      bump:
+        description: Force the bump level (auto = derive from commits)
+        required: false
+        type: choice
+        default: auto
+        options: [auto, patch, minor, major]
 
 jobs:
   release:
-    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@713fb1bcd3bec558aaf1932183d435292e16e0ba # v1.3.1
+    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@30f991da42d2a1fd29fcc38d83c9831b95f6dc50 # v1.3.3
     with:
       spoon_name: ProcessWatcher
       tag: ${{ inputs.tag }}
+      bump: ${{ inputs.bump }}

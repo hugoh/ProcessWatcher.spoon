@@ -11,10 +11,10 @@ on: # yamllint disable-line rule:truthy
       - main
   pull_request:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   check:
-    uses: hugoh/spoon-tools/.github/workflows/spoon-hk.yml@713fb1bcd3bec558aaf1932183d435292e16e0ba # v1.3.1
+    uses: hugoh/gh-workflows/.github/workflows/hk.yml@5aa8b976ce4126832a56a36c81c08d01b2b13073 # v1.37.2
+    permissions:
+      contents: read
+      packages: read
+      statuses: write
