@@ -21,11 +21,17 @@ on: # yamllint disable-line rule:truthy
         type: choice
         default: auto
         options: [auto, patch, minor, major]
+      docs_only:
+        description: Regenerate and redeploy the Pages docs only (no bump, no release)
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   release:
-    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@30f991da42d2a1fd29fcc38d83c9831b95f6dc50 # v1.3.3
+    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@4c1e6e45336f587230cd416c7e32c5f999a54ae4 # v1.4.0
     with:
       spoon_name: ProcessWatcher
       tag: ${{ inputs.tag }}
       bump: ${{ inputs.bump }}
+      docs_only: ${{ inputs.docs_only == true }}
