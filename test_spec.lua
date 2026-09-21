@@ -65,6 +65,10 @@ before_each(function()
 				function m:setTitle(t) self._title = t end
 				function m:setIcon(icon) self._icon = icon end
 				function m:setMenu(items) self._menuItems = items end
+				function m:autosaveName(name)
+					self._autosaveName = name
+					return self
+				end
 				function m:delete() self._deleted = true end
 				return m
 			end,
@@ -1054,6 +1058,12 @@ describe("ProcessWatcher", function()
 			assert.is.table(ProcessWatcher._menu)
 			assert.is.table(ProcessWatcher._timer)
 			assert.is_true(ProcessWatcher._running)
+		end)
+
+		it("sets an autosave name so macOS remembers the menu bar item position", function()
+			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			ProcessWatcher:start()
+			assert.are.equal("ProcessWatcher", ProcessWatcher._menu._autosaveName)
 		end)
 
 		it("tears down menu and timer on stop", function()
