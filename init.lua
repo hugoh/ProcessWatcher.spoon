@@ -828,7 +828,7 @@ end
 function obj:start()
 	if not self._config then self:loadConfig() end
 	if self._timer then self:stop() end
-	self._menu = hs.menubar.new()
+	self._menu = hs.menubar.new():autosaveName(self.name)
 	self:_loadIcon()
 	self._wakeWatcher = hs.caffeinate.watcher.new(function(eventType)
 		if eventType == hs.caffeinate.watcher.systemWillSleep then
