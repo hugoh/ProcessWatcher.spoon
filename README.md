@@ -103,7 +103,7 @@ Note: on a crowded menu bar (many status items, or a notched MacBook Pro display
 - `openConfig()` - Open the config file in your default JSON editor
 - `start()` - Begin periodic sampling and show the menu bar icon
 - `stop()` - Stop sampling and remove the menu bar icon
-- `kill(nameOrPid)` - Terminate a process by name (all PIDs currently aggregated under that name) or PID; sends SIGTERM, escalates to SIGKILL if it's still alive after `terminateGraceSeconds`
+- `kill(nameOrPid)` - Terminate a process by name (all PIDs currently aggregated under that name) or PID; sends SIGTERM, escalates to SIGKILL if the same program still holds the PID after `terminateGraceSeconds`
 - `ignore(name)` - Snooze alerts for a process name for `snoozeHours`
 - `status()` - Human-readable summary of currently-flagged processes (name, CPU/mem%, time flagged, PIDs), processes still accumulating sustain ticks toward a flag (closest-to-flagging first), and the current top CPU/memory processes
 - `configSummary()` - Human-readable summary of current thresholds/sustain/interval/allowlist/overrides

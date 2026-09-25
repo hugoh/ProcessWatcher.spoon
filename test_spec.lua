@@ -718,7 +718,7 @@ describe("ProcessWatcher", function()
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
 			local killed = {}
 			mock_hs._setExecHandler(function(cmd)
-				table.insert(killed, cmd)
+				if cmd:find("^/bin/kill") then table.insert(killed, cmd) end
 				return "", true, "exit", 0
 			end)
 			fireNotification(mock_hs.notify._sent[1], mock_hs.notify.activationTypes.actionButtonClicked)
@@ -776,7 +776,7 @@ describe("ProcessWatcher", function()
 			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111", "222" } }
 			local cmds = {}
 			mock_hs._setExecHandler(function(cmd)
-				table.insert(cmds, cmd)
+				if cmd:find("^/bin/kill") then table.insert(cmds, cmd) end
 				return "", true, "exit", 0
 			end)
 			local ok = ProcessWatcher:kill("Foo")
@@ -788,7 +788,7 @@ describe("ProcessWatcher", function()
 		it("kills directly by numeric PID", function()
 			local cmds = {}
 			mock_hs._setExecHandler(function(cmd)
-				table.insert(cmds, cmd)
+				if cmd:find("^/bin/kill") then table.insert(cmds, cmd) end
 				return "", true, "exit", 0
 			end)
 			local ok = ProcessWatcher:kill("999")
@@ -806,7 +806,7 @@ describe("ProcessWatcher", function()
 			local cmds = {}
 			mock_hs._setExecHandler(function(cmd)
 				table.insert(cmds, cmd)
-				if cmd:find("kill %-0") then return "", true, "exit", 0 end -- still alive
+				if cmd:find("ps .*%-p 111") then return "Foo\n", true, "exit", 0 end -- still alive
 				return "", true, "exit", 0
 			end)
 			ProcessWatcher:kill("Foo")
@@ -821,16 +821,76 @@ describe("ProcessWatcher", function()
 		it("does not escalate if the process is already gone", function()
 			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111" } }
 			local cmds = {}
+			local alive = true
 			mock_hs._setExecHandler(function(cmd)
 				table.insert(cmds, cmd)
-				if cmd:find("kill %-0") then return "", true, "exit", 1 end -- gone
+				if cmd:find("ps .*%-p 111") then return alive and "Foo\n" or "", true, "exit", alive and 0 or 1 end
 				return "", true, "exit", 0
 			end)
 			ProcessWatcher:kill("Foo")
+			alive = false
 			mock_hs._fireTimers()
 			for _, c in ipairs(cmds) do
 				assert.falsy(c:find("KILL " .. "111"))
 			end
+		end)
+	end)
+
+	describe("kill escalation safety", function()
+		before_each(function() ProcessWatcher:loadConfig() end)
+
+		it("keeps the SIGKILL escalation timer alive through garbage collection", function()
+			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111" } }
+			local live = setmetatable({}, { __mode = "k" })
+			mock_hs.timer.doAfter = function(_delay, fn)
+				local t = { _fn = fn }
+				function t:stop() self._stopped = true end
+				live[t] = true
+				return t
+			end
+			local cmds = {}
+			mock_hs._setExecHandler(function(cmd)
+				table.insert(cmds, cmd)
+				if cmd:find("ps .*%-p 111") then return "Foo\n", true, "exit", 0 end
+				return "", true, "exit", 0
+			end)
+
+			ProcessWatcher:kill("Foo")
+			collectgarbage("collect")
+			local escalation = next(live)
+			assert.is_not_nil(escalation)
+			escalation._fn()
+
+			assert.truthy(cmds[#cmds]:find("kill %-KILL 111"))
+		end)
+
+		it("does not SIGKILL a pid that now belongs to a different program", function()
+			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111" } }
+			local owner = "Foo"
+			local cmds = {}
+			mock_hs._setExecHandler(function(cmd)
+				table.insert(cmds, cmd)
+				if cmd:find("ps .*%-p 111") then return owner .. "\n", true, "exit", 0 end
+				return "", true, "exit", 0
+			end)
+
+			ProcessWatcher:kill("Foo")
+			owner = "Unrelated"
+			mock_hs._fireTimers()
+
+			for _, c in ipairs(cmds) do
+				assert.falsy(c:find("KILL"))
+			end
+		end)
+
+		it("withdraws outstanding notifications on stop so a stale one can't kill later", function()
+			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			ProcessWatcher:start()
+			ProcessWatcher:_notify("Bad", "cpu", 99, 600)
+
+			ProcessWatcher:stop()
+
+			assert.are.equal(1, #mock_hs.notify._withdrawn)
 		end)
 	end)
 
