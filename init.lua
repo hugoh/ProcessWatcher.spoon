@@ -49,6 +49,9 @@ obj._lastSample = {}
 -- "name:metric" -> the hs.notify object for a still-outstanding (not acted on) alert, so it
 -- can be withdrawn if the flag clears before the user acts on it.
 obj._pendingNotifications = {}
+-- Pending SIGKILL escalation timers. Hammerspoon garbage-collects a running
+-- hs.timer that nothing references, and it then never fires.
+obj._escalations = {}
 
 local DEFAULT_CONFIG = {
 	interval = 30, -- seconds between samples
@@ -411,18 +414,27 @@ function obj:ignore(name)
 	self:_updateMenu()
 end
 
+-- The executable name running as pid, or "" if no such process exists.
+local function commOf(pid)
+	local out = hs.execute("/bin/ps -c -o comm= -p " .. pid)
+	return out and out:match("^%s*(.-)%s*$") or ""
+end
+
 function obj:_terminatePid(pid)
+	local comm = commOf(pid)
 	self.log.i("Terminating pid " .. pid .. " (SIGTERM)")
 	hs.execute("/bin/kill -TERM " .. pid)
-	hs.timer.doAfter(self._config.terminateGraceSeconds, function()
-		-- kill -0 exits 0 iff the pid is still alive; hs.execute's 4th return value
-		-- is the exit code (its 2nd return reflects task-launch success, not exit status).
-		local _, _, _, rc = hs.execute("/bin/kill -0 " .. pid .. " 2>/dev/null")
-		if rc == 0 then
+	local escalation
+	escalation = hs.timer.doAfter(self._config.terminateGraceSeconds, function()
+		self._escalations[escalation] = nil
+		-- Comparing the executable name, not just liveness, keeps a pid reused by
+		-- another program during the grace period from being SIGKILLed.
+		if comm ~= "" and commOf(pid) == comm then
 			self.log.w("pid " .. pid .. " still alive after grace period, sending SIGKILL")
 			hs.execute("/bin/kill -KILL " .. pid)
 		end
 	end)
+	self._escalations[escalation] = true
 end
 
 --- ProcessWatcher:kill(nameOrPid)
@@ -874,6 +886,12 @@ function obj:stop()
 	if self._menu then
 		self._menu:delete()
 		self._menu = nil
+	end
+	-- Once stopped, _lastSample goes stale, so a notification's Terminate could
+	-- hit pids since reused by other processes.
+	for key, note in pairs(self._pendingNotifications) do
+		pcall(function() note:withdraw() end)
+		self._pendingNotifications[key] = nil
 	end
 	self._running = false
 	self.log.f("Stopped %s v%s", self.name, self.version)
