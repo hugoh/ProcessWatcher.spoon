@@ -264,6 +264,15 @@ describe("ProcessWatcher", function()
 			assert.are.equal(60, ProcessWatcher._config.memThreshold) -- untouched, from disk
 		end)
 
+		it("configure() applies a false value over a true disk value", function()
+			mock_hs._setConfig(ProcessWatcher.configPath, { notify = true })
+			ProcessWatcher:loadConfig()
+			ProcessWatcher:configure({ notify = false })
+			assert.is_false(ProcessWatcher._config.notify)
+			ProcessWatcher:loadConfig()
+			assert.is_false(ProcessWatcher._config.notify)
+		end)
+
 		it("keeps a malformed file untouched instead of overwriting it", function()
 			-- Simulate: file exists on disk (hs.fs.attributes truthy) but hs.json.read
 			-- returned nil because it failed to parse.
