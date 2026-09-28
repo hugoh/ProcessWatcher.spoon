@@ -101,7 +101,13 @@ end
 local function _mergeConfigs(diskCfg, luaCfg)
 	local merged = {}
 	for k in pairs(DEFAULT_CONFIG) do
-		if k ~= "allowlist" and k ~= "overrides" then merged[k] = luaCfg[k] ~= nil and luaCfg[k] or diskCfg[k] end
+		if k ~= "allowlist" and k ~= "overrides" then
+			if luaCfg[k] ~= nil then
+				merged[k] = luaCfg[k]
+			else
+				merged[k] = diskCfg[k]
+			end
+		end
 	end
 	for _, key in ipairs({ "allowlist", "overrides" }) do
 		-- diskCfg here is sometimes self._luaConfig (via configure()'s first merge
