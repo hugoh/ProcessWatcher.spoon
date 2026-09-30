@@ -102,6 +102,29 @@ before_each(function()
 	mock_hs.execute = function(cmd) return exec_handler(cmd) end
 	mock_hs._setExecHandler = function(fn) exec_handler = fn end
 
+	-- Runs the callback synchronously from start() (as hs.task may) unless
+	-- _deferTasks is set, in which case the test calls task._finish() itself.
+	mock_hs._now = 0
+	mock_hs.timer.secondsSinceEpoch = function() return mock_hs._now end
+	mock_hs._tasks = {}
+	mock_hs._deferTasks = false
+	mock_hs.task = {
+		new = function(path, callback, args)
+			local task = { _terminated = false }
+			function task._finish()
+				local out, _, _, code = exec_handler(path .. " " .. table.concat(args, " "))
+				callback(code or 0, out, "")
+			end
+			function task:start()
+				table.insert(mock_hs._tasks, self)
+				if not mock_hs._deferTasks then self._finish() end
+				return true
+			end
+			function task:terminate() self._terminated = true end
+			return task
+		end,
+	}
+
 	mock_hs.timer.doAfter = function(_delay, fn)
 		local t = { _fn = fn, _stopped = false, _recurring = false }
 		function t:stop() self._stopped = true end
@@ -1118,6 +1141,73 @@ describe("ProcessWatcher", function()
 			"omits the post-wake grace line when no grace period is active",
 			function() assert.is_nil(ProcessWatcher:status():find("Post%-wake grace:")) end
 		)
+	end)
+
+	describe("async sampling", function()
+		before_each(function() ProcessWatcher:loadConfig() end)
+
+		it("does not start a second ps while one is still running", function()
+			mock_hs._deferTasks = true
+			ProcessWatcher:_sample()
+			ProcessWatcher:_sample()
+			assert.are.equal(1, #mock_hs._tasks)
+		end)
+
+		it("samples again once the previous ps has finished", function()
+			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			mock_hs._deferTasks = true
+			ProcessWatcher:_sample()
+			mock_hs._tasks[1]._finish()
+			assert.is.table(ProcessWatcher._lastSample["Finder"])
+			ProcessWatcher:_sample()
+			assert.are.equal(2, #mock_hs._tasks)
+		end)
+
+		it("abandons a ps that never reports back so sampling can't stay stuck", function()
+			mock_hs._now = 0
+			mock_hs._deferTasks = true
+			ProcessWatcher:_sample()
+			local stuck = mock_hs._tasks[1]
+			mock_hs._now = ProcessWatcher._config.interval * 2 + 1
+			ProcessWatcher:_sample()
+			assert.is_true(stuck._terminated)
+			assert.are.equal(2, #mock_hs._tasks)
+		end)
+
+		it("does not abandon a ps that is merely slow", function()
+			mock_hs._now = 0
+			mock_hs._deferTasks = true
+			ProcessWatcher:_sample()
+			mock_hs._now = ProcessWatcher._config.interval
+			ProcessWatcher:_sample()
+			assert.are.equal(1, #mock_hs._tasks)
+		end)
+
+		it("allows sampling again after ps fails", function()
+			mock_hs._setExecHandler(function(_cmd) return "", false, "exit", 1 end)
+			ProcessWatcher:_sample()
+			ProcessWatcher:_sample()
+			assert.are.equal(2, #mock_hs._tasks)
+		end)
+
+		it("ignores a ps result that arrives after stop", function()
+			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			mock_hs._deferTasks = true
+			ProcessWatcher:start()
+			local task = mock_hs._tasks[1]
+			ProcessWatcher:stop()
+			assert.is_true(task._terminated)
+			task._finish()
+			assert.is_nil(ProcessWatcher._lastSample["Finder"])
+		end)
+
+		it("keeps the recurring timer alive when a sample throws", function()
+			ProcessWatcher:start()
+			ProcessWatcher._sample = function() error("boom") end
+			local timer = ProcessWatcher._timer
+			assert.has_no.errors(function() timer._fn() end)
+			assert.truthy(#ProcessWatcher.log._errors > 0)
+		end)
 	end)
 
 	describe("start/stop lifecycle", function()

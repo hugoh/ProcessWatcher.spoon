@@ -52,6 +52,10 @@ obj._pendingNotifications = {}
 -- Pending SIGKILL escalation timers. Hammerspoon garbage-collects a running
 -- hs.timer that nothing references, and it then never fires.
 obj._escalations = {}
+obj._sampling = nil
+obj._sampleTask = nil
+obj._sampleGeneration = 0
+obj._sampleStartedAt = 0
 
 local DEFAULT_CONFIG = {
 	interval = 30, -- seconds between samples
@@ -600,17 +604,48 @@ function obj:_updateMenu()
 	end
 end
 
+-- hs.task's callback can fire synchronously from start(), so _sampling is set first.
+-- A stop() bumps the generation so a ps result that lands afterwards is dropped.
 function obj:_sample()
-	local out = hs.execute("/bin/ps -A -c -o pid=,pcpu=,pmem=,comm=")
-	if not out or out == "" then
-		self.log.w("ps returned no output")
+	if self._sampling then
+		-- hs.task can drop its completion callback (Hammerspoon issue #3210), which would
+		-- otherwise leave _sampling set and end sampling silently.
+		if hs.timer.secondsSinceEpoch() - self._sampleStartedAt <= self._config.interval * 2 then return end
+		self.log.w("ps did not finish in time; abandoning it")
+		self._sampleGeneration = self._sampleGeneration + 1
+		if self._sampleTask then self._sampleTask:terminate() end
+		self._sampleTask = nil
+		self._sampling = nil
+	end
+	local generation = self._sampleGeneration
+	local function done(exitCode, stdout)
+		if generation ~= self._sampleGeneration then return end
+		self._sampling = nil
+		self._sampleTask = nil
+		if exitCode ~= 0 or not stdout or stdout == "" then
+			self.log.w("ps returned no output")
+			return
+		end
+		local byName = aggregateByName(parsePs(self, stdout))
+		self._lastSample = byName
+		self:_evaluate(byName)
+		self:_updateMenu()
+	end
+	self._sampling = true
+	self._sampleStartedAt = hs.timer.secondsSinceEpoch()
+	local task = hs.task.new("/bin/ps", done, { "-A", "-c", "-o", "pid=,pcpu=,pmem=,comm=" })
+	if not (task and task:start()) then
+		self._sampling = nil
+		self.log.w("Failed to start ps")
 		return
 	end
-	local byPid = parsePs(self, out)
-	local byName = aggregateByName(byPid)
-	self._lastSample = byName
-	self:_evaluate(byName)
-	self:_updateMenu()
+	if self._sampling then self._sampleTask = task end
+end
+
+-- hs.timer stops a repeating timer whose callback throws, which would silently end sampling.
+function obj:_safeSample()
+	local ok, err = xpcall(self._sample, debug.traceback, self)
+	if not ok then self.log.e("Sample failed: " .. tostring(err)) end
 end
 
 --- ProcessWatcher:status()
@@ -872,7 +907,7 @@ function obj:start()
 		self._config.sustainSeconds
 	)
 	self:_sample()
-	self._timer = hs.timer.doEvery(self._config.interval, function() self:_sample() end)
+	self._timer = hs.timer.doEvery(self._config.interval, function() self:_safeSample() end)
 	self._running = true
 	return self
 end
@@ -881,6 +916,10 @@ end
 --- Method
 --- Stops sampling and removes the menu bar icon.
 function obj:stop()
+	self._sampleGeneration = self._sampleGeneration + 1
+	if self._sampleTask then self._sampleTask:terminate() end
+	self._sampleTask = nil
+	self._sampling = nil
 	if self._timer then
 		self._timer:stop()
 		self._timer = nil
