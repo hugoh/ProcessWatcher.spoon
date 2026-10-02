@@ -21,5 +21,5 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: hugoh/gh-workflows/setup@5aa8b976ce4126832a56a36c81c08d01b2b13073 # v1.37.2
+      - uses: hugoh/gh-workflows/setup@fc872ebc6ac6bb28fa73a2e83f9f354faad9b5b7 # v1.40.6
       - run: mise run test
