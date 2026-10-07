@@ -138,18 +138,23 @@ local function _readDiskConfig(self)
 	-- but fails to parse (malformed JSON). Distinguish the two via hs.fs.attributes
 	-- so a corrupt file is surfaced instead of being silently treated as empty.
 	local parseFailed = config == nil and hs.fs.attributes(self.configPath) ~= nil
-	config = config or {}
-	local diskConfig = {}
-	for k, v in pairs(DEFAULT_CONFIG) do
-		if config[k] ~= nil then
-			diskConfig[k] = config[k]
-		else
-			diskConfig[k] = v
-		end
+	return _mergeConfigs(DEFAULT_CONFIG, config or {}), parseFailed
+end
+
+local function _resolveConfig(self, luaCfg)
+	local disk, parseFailed = _readDiskConfig(self)
+	local candidate = _mergeConfigs(disk, luaCfg)
+	local ok, err = validateConfig(candidate)
+	if not ok then error("ProcessWatcher: invalid config at " .. self.configPath .. ": " .. err, 3) end
+	return candidate, parseFailed
+end
+
+function obj:_restartIfRunning()
+	if self._running then
+		self:stop()
+		self:start()
 	end
-	diskConfig.allowlist = hs.fnutils.copy(config.allowlist or {})
-	diskConfig.overrides = hs.fnutils.copy(config.overrides or {})
-	return { config = diskConfig, parseFailed = parseFailed }
+	return self
 end
 
 --- ProcessWatcher:loadConfig()
@@ -161,14 +166,10 @@ end
 --- config -- so a broken on-disk file can never disrupt already-running monitoring
 --- via `reloadConfig()`, only prevent a first-ever `start()`.
 function obj:loadConfig()
-	local disk = _readDiskConfig(self)
-	local candidate = _mergeConfigs(disk.config, self._luaConfig or {})
-
-	local ok, err = validateConfig(candidate)
-	if not ok then error("ProcessWatcher: invalid config at " .. self.configPath .. ": " .. err, 2) end
+	local candidate, parseFailed = _resolveConfig(self, self._luaConfig or {})
 	self._config = candidate
 
-	if disk.parseFailed then
+	if parseFailed then
 		self.log.w(
 			"Config file at "
 				.. self.configPath
@@ -191,32 +192,18 @@ end
 --- monitoring, if any, is left untouched.
 function obj:configure(cfg)
 	local candidateLuaConfig = _mergeConfigs(self._luaConfig or {}, cfg or {})
-	local disk = _readDiskConfig(self)
-	local candidate = _mergeConfigs(disk.config, candidateLuaConfig)
-
-	local ok, err = validateConfig(candidate)
-	if not ok then error("ProcessWatcher: invalid config: " .. err, 2) end
+	local candidate = _resolveConfig(self, candidateLuaConfig)
 	self._luaConfig = candidateLuaConfig
 	self._config = candidate
-
-	if self._running then
-		self:stop()
-		self:start()
-	end
-	return self
+	return self:_restartIfRunning()
 end
 
 --- ProcessWatcher:reloadConfig()
 --- Method
 --- Re-reads `configPath` from disk (e.g. after hand-editing it) and restarts monitoring if running.
 function obj:reloadConfig()
-	local wasRunning = self._running
 	self:loadConfig()
-	if wasRunning then
-		self:stop()
-		self:start()
-	end
-	return self
+	return self:_restartIfRunning()
 end
 
 --- ProcessWatcher:openConfig()
@@ -235,21 +222,23 @@ end
 -- config, or the global config outright if no override matches.
 function obj:_thresholdsFor(name)
 	local cfg = self._config
+	local match = {}
 	for _, o in ipairs(cfg.overrides or {}) do
 		if o.pattern then
 			local ok, matchStart = pcall(string.find, name, o.pattern)
 			if not ok then
 				self.log.wf("Invalid override pattern %q: %s", tostring(o.pattern), tostring(matchStart))
 			elseif matchStart then
-				return {
-					cpuThreshold = o.cpuThreshold or cfg.cpuThreshold,
-					memThreshold = o.memThreshold or cfg.memThreshold,
-					sustainSeconds = o.sustainSeconds or cfg.sustainSeconds,
-				}
+				match = o
+				break
 			end
 		end
 	end
-	return { cpuThreshold = cfg.cpuThreshold, memThreshold = cfg.memThreshold, sustainSeconds = cfg.sustainSeconds }
+	return {
+		cpuThreshold = match.cpuThreshold or cfg.cpuThreshold,
+		memThreshold = match.memThreshold or cfg.memThreshold,
+		sustainSeconds = match.sustainSeconds or cfg.sustainSeconds,
+	}
 end
 
 function obj:_isExcluded(name, now)
@@ -272,7 +261,7 @@ local function parsePs(self, output)
 	for line in output:gmatch("[^\r\n]+") do
 		local pid, cpu, mem, name = line:match("^%s*(%d+)%s+([%d%.]+)%s+([%d%.]+)%s+(.+)$")
 		if pid and cpu and mem and name then
-			byPid[pid] = { pid = pid, cpu = tonumber(cpu), mem = tonumber(mem), name = name }
+			byPid[tonumber(pid)] = { pid = tonumber(pid), cpu = tonumber(cpu), mem = tonumber(mem), name = name }
 		else
 			self.log.wf("Skipping unparsable ps line: %s", line)
 		end
@@ -293,9 +282,9 @@ local function aggregateByName(byPid)
 		table.insert(entry.pids, p.pid)
 	end
 	-- pairs(byPid) iterates in unspecified order, so sort each name's PID list
-	-- (numerically) for stable, readable output in status()/the menu bar.
+	-- for stable, readable output in status()/the menu bar.
 	for _, entry in pairs(byName) do
-		table.sort(entry.pids, function(a, b) return tonumber(a) < tonumber(b) end)
+		table.sort(entry.pids)
 	end
 	return byName
 end
@@ -475,13 +464,12 @@ function obj:kill(nameOrPid)
 end
 
 function obj:_topProcesses()
-	local list = {}
-	for name, data in pairs(self._lastSample) do
-		table.insert(list, { name = name, cpu = data.cpu, mem = data.mem, pids = data.pids })
+	local byCpu, byMem = {}, {}
+	for _, data in pairs(self._lastSample) do
+		table.insert(byCpu, data)
+		table.insert(byMem, data)
 	end
-	local byCpu = hs.fnutils.copy(list)
 	table.sort(byCpu, function(a, b) return a.cpu > b.cpu end)
-	local byMem = hs.fnutils.copy(list)
 	table.sort(byMem, function(a, b) return a.mem > b.mem end)
 	local function trim(t)
 		local out = {}
