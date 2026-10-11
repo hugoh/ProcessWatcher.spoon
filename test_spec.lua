@@ -1,199 +1,73 @@
--- Busted tests for ProcessWatcher Spoon using a mock hs environment.
+-- Busted tests for ProcessWatcher Spoon using the shared hs_mock from spoon-tools.
 
-local mock_hs
+local hs_mock = require("hs_mock")
+
+local hs, ctl
 local ProcessWatcher
+local execHandler
+local deferTasks
 
-local function makeLogger()
-	local l = { _infos = {}, _warnings = {}, _errors = {} }
-	l.i = function(msg) table.insert(l._infos, msg) end
-	l.f = function(fmt, ...) table.insert(l._infos, string.format(fmt, ...)) end
-	l.w = function(msg) table.insert(l._warnings, msg) end
-	l.wf = function(fmt, ...) table.insert(l._warnings, string.format(fmt, ...)) end
-	l.e = function(msg) table.insert(l._errors, msg) end
-	l.d = function() end
-	l.df = function() end
-	return l
+-- What hs.execute returns for a command; hs.task runs report through it too.
+local function setExecHandler(fn) execHandler = fn end
+
+local function setConfig(path, cfg) ctl.files[path] = cfg end
+
+local function runTask(task)
+	local out, _, _, code = execHandler(task._path .. " " .. table.concat(task._args, " "))
+	return code or 0, out, ""
+end
+
+-- Completes a task that `deferTasks` held back.
+local function finishTask(task) task:complete(runTask(task)) end
+
+local function sent()
+	local notes = {}
+	for _, n in ipairs(ctl.notifications) do
+		if n._sent then table.insert(notes, n) end
+	end
+	return notes
+end
+
+local function withdrawn()
+	local notes = {}
+	for _, n in ipairs(ctl.notifications) do
+		if n._withdrawn then table.insert(notes, n) end
+	end
+	return notes
 end
 
 before_each(function()
-	local config_store = {}
-	local exec_handler = function(_cmd) return "", true, "exit", 0 end
-	local timers = {}
+	hs, ctl = hs_mock.new()
+	_G.hs = hs
 
-	mock_hs = {
-		logger = { new = function() return makeLogger() end },
-		json = {
-			read = function(path) return config_store[path] end,
-			write = function(data, path, _pretty, _ensureAscii)
-				config_store[path] = data
-				return true
-			end,
-		},
-		fs = {
-			mkdir = function(_p) return true end,
-			attributes = function(p) return config_store[p] and {} or nil end,
-		},
-		fnutils = {
-			copy = function(t)
-				local out = {}
-				for k, v in pairs(t) do
-					out[k] = v
-				end
-				return out
-			end,
-			contains = function(t, val)
-				for _, v in ipairs(t) do
-					if v == val then return true end
-				end
-				return false
-			end,
-		},
-		notify = {
-			_sent = {},
-			activationTypes = {
-				closed = 0,
-				contentsClicked = 1,
-				actionButtonClicked = 2,
-				replied = 3,
-				additionalActionClicked = 4,
-			},
-		},
-		timer = { _all = timers },
-		menubar = {
-			new = function()
-				local m = {}
-				function m:setTitle(t) self._title = t end
-				function m:setIcon(icon) self._icon = icon end
-				function m:setMenu(items) self._menuItems = items end
-				function m:autosaveName(name)
-					self._autosaveName = name
+	execHandler = function(_cmd) return "", true, "exit", 0 end
+	deferTasks = false
+	-- Tasks finish synchronously from start() (as hs.task may) unless deferTasks is set.
+	ctl.onTask = function(task)
+		if not deferTasks then return runTask(task) end
+	end
+	hs.execute = function(cmd) return execHandler(cmd) end
+	-- hs_mock raises on reading an unset hs.<name>; false is "not loaded".
+	hs.ipc = false
+	hs.open = function() end
+	hs.canvas = {
+		new = function(rect)
+			local c = { _rect = rect }
+			function c.imageFromCanvas()
+				local img = { _isTemplate = false }
+				function img:template(state)
+					self._isTemplate = state
 					return self
 				end
-				function m:delete() self._deleted = true end
-				return m
-			end,
-		},
-		canvas = {
-			new = function(rect)
-				local c = { _rect = rect }
-				function c.imageFromCanvas()
-					local img = { _isTemplate = false }
-					function img:template(state)
-						self._isTemplate = state
-						return self
-					end
-					return img
-				end
-				function c:delete() self._deleted = true end
-				return c
-			end,
-		},
-		caffeinate = {
-			watcher = {
-				systemDidWake = "systemDidWake",
-				systemWillSleep = "systemWillSleep",
-			},
-		},
-	}
-
-	mock_hs._opened = {}
-	mock_hs.open = function(p) table.insert(mock_hs._opened, p) end
-
-	mock_hs.execute = function(cmd) return exec_handler(cmd) end
-	mock_hs._setExecHandler = function(fn) exec_handler = fn end
-
-	-- Runs the callback synchronously from start() (as hs.task may) unless
-	-- _deferTasks is set, in which case the test calls task._finish() itself.
-	mock_hs._now = 0
-	mock_hs.timer.secondsSinceEpoch = function() return mock_hs._now end
-	mock_hs._tasks = {}
-	mock_hs._deferTasks = false
-	mock_hs.task = {
-		new = function(path, callback, args)
-			local task = { _terminated = false }
-			function task._finish()
-				local out, _, _, code = exec_handler(path .. " " .. table.concat(args, " "))
-				callback(code or 0, out, "")
+				return img
 			end
-			function task:start()
-				table.insert(mock_hs._tasks, self)
-				if not mock_hs._deferTasks then self._finish() end
-				return true
-			end
-			function task:terminate() self._terminated = true end
-			return task
+			function c:delete() self._deleted = true end
+			return c
 		end,
 	}
 
-	mock_hs.timer.doAfter = function(_delay, fn)
-		local t = { _fn = fn, _stopped = false, _recurring = false }
-		function t:stop() self._stopped = true end
-		table.insert(timers, t)
-		return t
-	end
-	mock_hs.timer.doEvery = function(_interval, fn)
-		local t = { _fn = fn, _stopped = false, _recurring = true }
-		function t:stop() self._stopped = true end
-		table.insert(timers, t)
-		return t
-	end
-	mock_hs._fireTimers = function()
-		-- Fire (and clear) all pending one-shot doAfter timers; recurring
-		-- doEvery timers are left alone (call their _fn directly instead).
-		local pending = {}
-		for _, t in ipairs(timers) do
-			if not t._recurring and not t._stopped then table.insert(pending, t) end
-		end
-		timers = {}
-		for i, t in ipairs(mock_hs.timer._all) do
-			if t._recurring then table.insert(timers, t) end
-			mock_hs.timer._all[i] = nil
-		end
-		for _, t in ipairs(timers) do
-			table.insert(mock_hs.timer._all, t)
-		end
-		for _, t in ipairs(pending) do
-			t._fn()
-		end
-	end
-
-	mock_hs.caffeinate.watcher.new = function(fn)
-		local w = { _fn = fn, _started = false }
-		function w:start() self._started = true end
-		function w:stop() self._started = false end
-		mock_hs.caffeinate._lastWatcher = w
-		return w
-	end
-	-- Simulates hs.caffeinate.watcher firing an event (default: systemDidWake) on the
-	-- most recently created watcher, mirroring _fireTimers above.
-	mock_hs._fireCaffeinateEvent = function(eventType)
-		local w = mock_hs.caffeinate._lastWatcher
-		if w then w._fn(eventType or mock_hs.caffeinate.watcher.systemDidWake) end
-	end
-
-	mock_hs.notify._withdrawn = {}
-	mock_hs.notify.new = function(fn, attrs)
-		local n = { _fn = fn, _attrs = attrs, _withdrawn = false }
-		function n:send() table.insert(mock_hs.notify._sent, { attrs = self._attrs, fn = self._fn, note = self }) end
-		function n:withdraw()
-			self._withdrawn = true
-			table.insert(mock_hs.notify._withdrawn, self._attrs)
-		end
-		return n
-	end
-
-	mock_hs._setConfig = function(path, cfg) config_store[path] = cfg end
-
-	package.loaded.hs = nil
-	_G.hs = mock_hs
-
 	ProcessWatcher = dofile("init.lua")
 end)
-
--- Simulates the user clicking a notification action button.
-local function fireNotification(entry, activationType)
-	entry.fn({ activationType = function() return activationType end })
-end
 
 describe("ProcessWatcher", function()
 	describe("module structure", function()
@@ -239,7 +113,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("reads existing overrides from disk", function()
-			mock_hs._setConfig(ProcessWatcher.configPath, { cpuThreshold = 50, allowlist = { "Xcode" } })
+			setConfig(ProcessWatcher.configPath, { cpuThreshold = 50, allowlist = { "Xcode" } })
 			ProcessWatcher:loadConfig()
 			assert.are.equal(50, ProcessWatcher._config.cpuThreshold)
 			assert.are.equal(25, ProcessWatcher._config.memThreshold) -- untouched default
@@ -248,9 +122,9 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("never writes config.json", function()
-			mock_hs._setConfig(ProcessWatcher.configPath, { cpuThreshold = 50 })
+			setConfig(ProcessWatcher.configPath, { cpuThreshold = 50 })
 			local writeCalled = false
-			mock_hs.json.write = function()
+			hs.json.write = function()
 				writeCalled = true
 				return true
 			end
@@ -260,7 +134,7 @@ describe("ProcessWatcher", function()
 
 		it("does not create config.json when none existed", function()
 			local writeCalled = false
-			mock_hs.json.write = function()
+			hs.json.write = function()
 				writeCalled = true
 				return true
 			end
@@ -271,7 +145,7 @@ describe("ProcessWatcher", function()
 		it("configure() never writes config.json", function()
 			ProcessWatcher:loadConfig()
 			local writeCalled = false
-			mock_hs.json.write = function()
+			hs.json.write = function()
 				writeCalled = true
 				return true
 			end
@@ -280,7 +154,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("configure() scalar key overrides disk value; omitted keys keep the disk value", function()
-			mock_hs._setConfig(ProcessWatcher.configPath, { cpuThreshold = 70, memThreshold = 60 })
+			setConfig(ProcessWatcher.configPath, { cpuThreshold = 70, memThreshold = 60 })
 			ProcessWatcher:loadConfig()
 			ProcessWatcher:configure({ cpuThreshold = 91 })
 			assert.are.equal(91, ProcessWatcher._config.cpuThreshold)
@@ -288,7 +162,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("configure() applies a false value over a true disk value", function()
-			mock_hs._setConfig(ProcessWatcher.configPath, { notify = true })
+			setConfig(ProcessWatcher.configPath, { notify = true })
 			ProcessWatcher:loadConfig()
 			ProcessWatcher:configure({ notify = false })
 			assert.is_false(ProcessWatcher._config.notify)
@@ -299,16 +173,16 @@ describe("ProcessWatcher", function()
 		it("keeps a malformed file untouched instead of overwriting it", function()
 			-- Simulate: file exists on disk (hs.fs.attributes truthy) but hs.json.read
 			-- returned nil because it failed to parse.
-			mock_hs.fs.attributes = function(_p) return {} end
-			mock_hs.json.read = function(_p) return nil end
+			hs.fs.attributes = function(_p) return {} end
+			hs.json.read = function(_p) return nil end
 			local writeCalled = false
-			mock_hs.json.write = function()
+			hs.json.write = function()
 				writeCalled = true
 				return true
 			end
 			ProcessWatcher:loadConfig()
 			assert.is_false(writeCalled)
-			assert.are.equal(1, #ProcessWatcher.log._warnings)
+			assert.are.equal(1, #ctl.logged("warning"))
 		end)
 	end)
 
@@ -316,7 +190,7 @@ describe("ProcessWatcher", function()
 		it("reflects both a fresh disk edit and a previously-set configure() value", function()
 			ProcessWatcher:loadConfig()
 			ProcessWatcher:configure({ cpuThreshold = 91 })
-			mock_hs._setConfig(ProcessWatcher.configPath, { memThreshold = 33 })
+			setConfig(ProcessWatcher.configPath, { memThreshold = 33 })
 			ProcessWatcher:reloadConfig()
 			assert.are.equal(91, ProcessWatcher._config.cpuThreshold) -- Lua overlay still applied
 			assert.are.equal(33, ProcessWatcher._config.memThreshold) -- fresh disk value picked up
@@ -325,7 +199,7 @@ describe("ProcessWatcher", function()
 		it("picks up changes written to disk since the last load", function()
 			ProcessWatcher:loadConfig()
 			assert.are.equal(90, ProcessWatcher._config.cpuThreshold)
-			mock_hs._setConfig(ProcessWatcher.configPath, { cpuThreshold = 42 })
+			setConfig(ProcessWatcher.configPath, { cpuThreshold = 42 })
 			ProcessWatcher:reloadConfig()
 			assert.are.equal(42, ProcessWatcher._config.cpuThreshold)
 		end)
@@ -338,9 +212,9 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("restarts monitoring with the reloaded config if it was running", function()
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
 			ProcessWatcher:start()
-			mock_hs._setConfig(ProcessWatcher.configPath, { cpuThreshold = 42 })
+			setConfig(ProcessWatcher.configPath, { cpuThreshold = 42 })
 			ProcessWatcher:reloadConfig()
 			assert.is_true(ProcessWatcher._running)
 			assert.are.equal(42, ProcessWatcher._config.cpuThreshold)
@@ -351,7 +225,7 @@ describe("ProcessWatcher", function()
 		before_each(function() ProcessWatcher:loadConfig() end)
 
 		it("aggregates CPU/memory across PIDs sharing a name", function()
-			mock_hs._setExecHandler(function(_cmd)
+			setExecHandler(function(_cmd)
 				local out = "111  50.0  2.0 Google Chrome Helper\n"
 					.. "222  60.0  3.0 Google Chrome Helper\n"
 					.. "333  10.0  1.0 Finder\n"
@@ -367,16 +241,14 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("skips unparsable lines without failing the whole sample", function()
-			mock_hs._setExecHandler(
-				function(_cmd) return "not a valid ps line\n111  50.0  2.0 Finder\n", true, "exit", 0 end
-			)
+			setExecHandler(function(_cmd) return "not a valid ps line\n111  50.0  2.0 Finder\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			assert.is.table(ProcessWatcher._lastSample["Finder"])
-			assert.truthy(#ProcessWatcher.log._warnings > 0)
+			assert.truthy(#ctl.logged("warning") > 0)
 		end)
 
 		it("handles empty ps output without erroring", function()
-			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "", true, "exit", 0 end)
 			assert.has_no.errors(function() ProcessWatcher:_sample() end)
 		end)
 	end)
@@ -395,7 +267,7 @@ describe("ProcessWatcher", function()
 			sample(95)
 			sample(95)
 			assert.is_nil(ProcessWatcher._flagged["Hog"])
-			assert.are.equal(0, #mock_hs.notify._sent)
+			assert.are.equal(0, #sent())
 		end)
 
 		it("flags once the tick count reaches the sustain threshold", function()
@@ -404,7 +276,7 @@ describe("ProcessWatcher", function()
 			sample(95)
 			assert.is.table(ProcessWatcher._flagged["Hog"])
 			assert.is_true(ProcessWatcher._flagged["Hog"].cpu)
-			assert.are.equal(1, #mock_hs.notify._sent)
+			assert.are.equal(1, #sent())
 		end)
 
 		it("tolerates a single dip below threshold instead of resetting progress", function()
@@ -433,12 +305,12 @@ describe("ProcessWatcher", function()
 			sample(95)
 			sample(95)
 			sample(95) -- flagged, notification sent
-			assert.are.equal(1, #mock_hs.notify._sent)
-			assert.are.equal(0, #mock_hs.notify._withdrawn)
+			assert.are.equal(1, #sent())
+			assert.are.equal(0, #withdrawn())
 			sample(0)
 			sample(0)
 			sample(0) -- decays back to 0, unflagged
-			assert.are.equal(1, #mock_hs.notify._withdrawn)
+			assert.are.equal(1, #withdrawn())
 		end)
 
 		it("clears counters/flags for a process that disappears entirely", function()
@@ -479,7 +351,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("an invalid configure() call leaves the previous config and running state untouched", function()
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
 			ProcessWatcher:loadConfig()
 			ProcessWatcher:configure({ interval = 60, sustainSeconds = 600 })
 			ProcessWatcher:start()
@@ -489,20 +361,20 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("loadConfig() rejects an invalid on-disk config without touching a previously-loaded one", function()
-			mock_hs._setConfig(ProcessWatcher.configPath, { interval = 60, sustainSeconds = 600 })
+			setConfig(ProcessWatcher.configPath, { interval = 60, sustainSeconds = 600 })
 			ProcessWatcher:loadConfig()
 			assert.are.equal(60, ProcessWatcher._config.interval)
-			mock_hs._setConfig(ProcessWatcher.configPath, { interval = 600, sustainSeconds = 600 })
+			setConfig(ProcessWatcher.configPath, { interval = 600, sustainSeconds = 600 })
 			assert.has_error(function() ProcessWatcher:loadConfig() end)
 			assert.are.equal(60, ProcessWatcher._config.interval) -- old in-memory config survives
 		end)
 
 		it("reloadConfig() with a broken on-disk file leaves already-running monitoring untouched", function()
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
 			ProcessWatcher:loadConfig()
 			ProcessWatcher:start()
 			local timerBefore = ProcessWatcher._timer
-			mock_hs._setConfig(ProcessWatcher.configPath, { interval = 600, sustainSeconds = 600 })
+			setConfig(ProcessWatcher.configPath, { interval = 600, sustainSeconds = 600 })
 			assert.has_error(function() ProcessWatcher:reloadConfig() end)
 			assert.is_true(ProcessWatcher._running)
 			assert.are.equal(timerBefore, ProcessWatcher._timer) -- never stopped/restarted
@@ -564,7 +436,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("concatenates Lua-configured overrides before disk overrides, Lua first", function()
-			mock_hs._setConfig(ProcessWatcher.configPath, {
+			setConfig(ProcessWatcher.configPath, {
 				overrides = { { pattern = "Finder", cpuThreshold = 300 } },
 			})
 			ProcessWatcher:loadConfig()
@@ -575,7 +447,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("does not touch disk overrides when configure() doesn't set the overrides key", function()
-			mock_hs._setConfig(ProcessWatcher.configPath, {
+			setConfig(ProcessWatcher.configPath, {
 				overrides = { { pattern = "Finder", cpuThreshold = 300 } },
 			})
 			ProcessWatcher:loadConfig()
@@ -651,7 +523,7 @@ describe("ProcessWatcher", function()
 				ProcessWatcher:_evaluate({ Teams = { name = "Teams", cpu = 95, mem = 0, pids = { "1" } } })
 			end
 			assert.is.table(ProcessWatcher._flagged["Teams"]) -- fell back to the global 90% threshold
-			assert.truthy(#ProcessWatcher.log._warnings > 0)
+			assert.truthy(#ctl.logged("warning") > 0)
 		end)
 
 		it("reflects the overridden sustainSeconds in the notification text", function()
@@ -662,8 +534,8 @@ describe("ProcessWatcher", function()
 			for _ = 1, 2 do
 				ProcessWatcher:_evaluate({ Teams = { name = "Teams", cpu = 99, mem = 0, pids = { "1" } } })
 			end
-			assert.are.equal(1, #mock_hs.notify._sent)
-			assert.truthy(mock_hs.notify._sent[1].attrs.informativeText:find("2s%+"))
+			assert.are.equal(1, #sent())
+			assert.truthy(sent()[1]._attributes.informativeText:find("2s%+"))
 		end)
 	end)
 
@@ -674,7 +546,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("concatenates a Lua-configured allowlist before the disk allowlist", function()
-			mock_hs._setConfig(ProcessWatcher.configPath, { allowlist = { "Finder" } })
+			setConfig(ProcessWatcher.configPath, { allowlist = { "Finder" } })
 			ProcessWatcher:loadConfig()
 			ProcessWatcher:configure({ allowlist = { "Xcode" } })
 			assert.are.same({ "Xcode", "Finder" }, ProcessWatcher._config.allowlist)
@@ -686,7 +558,7 @@ describe("ProcessWatcher", function()
 				ProcessWatcher:_evaluate({ Xcode = { name = "Xcode", cpu = 99, mem = 0, pids = { "1" } } })
 			end
 			assert.is_nil(ProcessWatcher._flagged["Xcode"])
-			assert.are.equal(0, #mock_hs.notify._sent)
+			assert.are.equal(0, #sent())
 		end)
 
 		it("suppresses re-alerting while a name is snoozed via ignore()", function()
@@ -695,7 +567,7 @@ describe("ProcessWatcher", function()
 			end
 			sample()
 			sample() -- flags, 1 notification
-			assert.are.equal(1, #mock_hs.notify._sent)
+			assert.are.equal(1, #sent())
 
 			ProcessWatcher:ignore("Bad")
 			assert.is_nil(ProcessWatcher._flagged["Bad"])
@@ -703,7 +575,7 @@ describe("ProcessWatcher", function()
 			sample()
 			sample() -- would flag again if not snoozed
 			assert.is_nil(ProcessWatcher._flagged["Bad"])
-			assert.are.equal(1, #mock_hs.notify._sent)
+			assert.are.equal(1, #sent())
 		end)
 
 		it("resumes flagging once the snooze window expires", function()
@@ -729,8 +601,8 @@ describe("ProcessWatcher", function()
 
 		it("sends an actionable notification with Terminate/Ignore", function()
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
-			assert.are.equal(1, #mock_hs.notify._sent)
-			local attrs = mock_hs.notify._sent[1].attrs
+			assert.are.equal(1, #sent())
+			local attrs = sent()[1]._attributes
 			assert.is_true(attrs.hasActionButton)
 			assert.are.equal("Terminate", attrs.actionButtonTitle)
 			assert.are.equal("Ignore", attrs.otherButtonTitle)
@@ -742,24 +614,24 @@ describe("ProcessWatcher", function()
 			assert.has_no.errors(
 				function() ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } }) end
 			)
-			assert.are.equal(1, #mock_hs.notify._sent)
+			assert.are.equal(1, #sent())
 		end)
 
 		it("Terminate action kills the process", function()
 			ProcessWatcher._lastSample["Bad"] = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } }
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
 			local killed = {}
-			mock_hs._setExecHandler(function(cmd)
+			setExecHandler(function(cmd)
 				if cmd:find("^/bin/kill") then table.insert(killed, cmd) end
 				return "", true, "exit", 0
 			end)
-			fireNotification(mock_hs.notify._sent[1], mock_hs.notify.activationTypes.actionButtonClicked)
+			ctl.activate(sent()[1], hs.notify.activationTypes.actionButtonClicked)
 			assert.truthy(killed[1]:find("kill %-TERM 1"))
 		end)
 
 		it("Ignore action snoozes the process", function()
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
-			fireNotification(mock_hs.notify._sent[1], mock_hs.notify.activationTypes.additionalActionClicked)
+			ctl.activate(sent()[1], hs.notify.activationTypes.additionalActionClicked)
 			assert.is_not_nil(ProcessWatcher._snooze["Bad"])
 			assert.is_nil(ProcessWatcher._flagged["Bad"])
 		end)
@@ -769,34 +641,34 @@ describe("ProcessWatcher", function()
 			function()
 				ProcessWatcher._lastSample["Bad"] = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } }
 				ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
-				assert.are.equal(1, #mock_hs.notify._sent)
+				assert.are.equal(1, #sent())
 				ProcessWatcher:kill("Bad") -- simulates acting via the menu bar/CLI, not the notification's own button
-				assert.are.equal(1, #mock_hs.notify._withdrawn)
+				assert.are.equal(1, #withdrawn())
 			end
 		)
 
 		it("withdraws the notification when the process is ignored via the menu/CLI", function()
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
-			assert.are.equal(1, #mock_hs.notify._sent)
+			assert.are.equal(1, #sent())
 			ProcessWatcher:ignore("Bad")
-			assert.are.equal(1, #mock_hs.notify._withdrawn)
+			assert.are.equal(1, #withdrawn())
 		end)
 
 		it("withdraws the notification when the process is added to the allowlist mid-flight", function()
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
-			assert.are.equal(1, #mock_hs.notify._sent)
+			assert.are.equal(1, #sent())
 			ProcessWatcher:configure({ allowlist = { "Bad" } })
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 0, pids = { "1" } } })
-			assert.are.equal(1, #mock_hs.notify._withdrawn)
+			assert.are.equal(1, #withdrawn())
 			assert.is_nil(ProcessWatcher._flagged["Bad"])
 		end)
 
 		it("tracks CPU and memory notifications independently", function()
 			ProcessWatcher:configure({ memThreshold = 20 })
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 99, mem = 50, pids = { "1" } } })
-			assert.are.equal(2, #mock_hs.notify._sent) -- one for cpu, one for mem
+			assert.are.equal(2, #sent()) -- one for cpu, one for mem
 			ProcessWatcher:_evaluate({ Bad = { name = "Bad", cpu = 0, mem = 50, pids = { "1" } } }) -- cpu recovers
-			assert.are.equal(1, #mock_hs.notify._withdrawn) -- only the cpu notification
+			assert.are.equal(1, #withdrawn()) -- only the cpu notification
 			assert.is.table(ProcessWatcher._flagged["Bad"]) -- still flagged on mem
 		end)
 	end)
@@ -807,7 +679,7 @@ describe("ProcessWatcher", function()
 		it("sends SIGTERM to every pid aggregated under a name", function()
 			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111", "222" } }
 			local cmds = {}
-			mock_hs._setExecHandler(function(cmd)
+			setExecHandler(function(cmd)
 				if cmd:find("^/bin/kill") then table.insert(cmds, cmd) end
 				return "", true, "exit", 0
 			end)
@@ -819,7 +691,7 @@ describe("ProcessWatcher", function()
 
 		it("kills directly by numeric PID", function()
 			local cmds = {}
-			mock_hs._setExecHandler(function(cmd)
+			setExecHandler(function(cmd)
 				if cmd:find("^/bin/kill") then table.insert(cmds, cmd) end
 				return "", true, "exit", 0
 			end)
@@ -829,20 +701,20 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("returns false for an unknown name", function()
-			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "", true, "exit", 0 end)
 			assert.is_false(ProcessWatcher:kill("NoSuchProcess"))
 		end)
 
 		it("escalates to SIGKILL if the process survives the grace period", function()
 			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111" } }
 			local cmds = {}
-			mock_hs._setExecHandler(function(cmd)
+			setExecHandler(function(cmd)
 				table.insert(cmds, cmd)
 				if cmd:find("ps .*%-p 111") then return "Foo\n", true, "exit", 0 end -- still alive
 				return "", true, "exit", 0
 			end)
 			ProcessWatcher:kill("Foo")
-			mock_hs._fireTimers()
+			ctl.flush()
 			local sawKill9 = false
 			for _, c in ipairs(cmds) do
 				if c:find("KILL") then sawKill9 = true end
@@ -854,14 +726,14 @@ describe("ProcessWatcher", function()
 			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111" } }
 			local cmds = {}
 			local alive = true
-			mock_hs._setExecHandler(function(cmd)
+			setExecHandler(function(cmd)
 				table.insert(cmds, cmd)
 				if cmd:find("ps .*%-p 111") then return alive and "Foo\n" or "", true, "exit", alive and 0 or 1 end
 				return "", true, "exit", 0
 			end)
 			ProcessWatcher:kill("Foo")
 			alive = false
-			mock_hs._fireTimers()
+			ctl.flush()
 			for _, c in ipairs(cmds) do
 				assert.falsy(c:find("KILL " .. "111"))
 			end
@@ -874,14 +746,14 @@ describe("ProcessWatcher", function()
 		it("keeps the SIGKILL escalation timer alive through garbage collection", function()
 			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111" } }
 			local live = setmetatable({}, { __mode = "k" })
-			mock_hs.timer.doAfter = function(_delay, fn)
+			hs.timer.doAfter = function(_delay, fn)
 				local t = { _fn = fn }
 				function t:stop() self._stopped = true end
 				live[t] = true
 				return t
 			end
 			local cmds = {}
-			mock_hs._setExecHandler(function(cmd)
+			setExecHandler(function(cmd)
 				table.insert(cmds, cmd)
 				if cmd:find("ps .*%-p 111") then return "Foo\n", true, "exit", 0 end
 				return "", true, "exit", 0
@@ -900,7 +772,7 @@ describe("ProcessWatcher", function()
 			ProcessWatcher._lastSample["Foo"] = { name = "Foo", cpu = 10, mem = 10, pids = { "111" } }
 			local owner = "Foo"
 			local cmds = {}
-			mock_hs._setExecHandler(function(cmd)
+			setExecHandler(function(cmd)
 				table.insert(cmds, cmd)
 				if cmd:find("ps .*%-p 111") then return owner .. "\n", true, "exit", 0 end
 				return "", true, "exit", 0
@@ -908,7 +780,7 @@ describe("ProcessWatcher", function()
 
 			ProcessWatcher:kill("Foo")
 			owner = "Unrelated"
-			mock_hs._fireTimers()
+			ctl.flush()
 
 			for _, c in ipairs(cmds) do
 				assert.falsy(c:find("KILL"))
@@ -916,20 +788,20 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("withdraws outstanding notifications on stop so a stale one can't kill later", function()
-			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "", true, "exit", 0 end)
 			ProcessWatcher:start()
 			ProcessWatcher:_notify("Bad", "cpu", 99, 600)
 
 			ProcessWatcher:stop()
 
-			assert.are.equal(1, #mock_hs.notify._withdrawn)
+			assert.are.equal(1, #withdrawn())
 		end)
 	end)
 
 	describe("menu bar", function()
 		before_each(function()
 			ProcessWatcher:loadConfig()
-			ProcessWatcher._menu = mock_hs.menubar.new()
+			ProcessWatcher._menu = hs.menubar.new()
 			ProcessWatcher:_loadIcon()
 		end)
 
@@ -946,7 +818,7 @@ describe("ProcessWatcher", function()
 			assert.are.equal("🌡️!", ProcessWatcher._menu._title)
 			assert.is_nil(ProcessWatcher._menu._icon)
 			local found = false
-			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
+			for _, item in ipairs(ProcessWatcher._menu._menu) do
 				if item.title and item.title:find("Bad") then found = true end
 			end
 			assert.is_true(found)
@@ -958,7 +830,7 @@ describe("ProcessWatcher", function()
 			ProcessWatcher._counters.cpu["Bad"] = 3
 			ProcessWatcher:_updateMenu()
 			local found = false
-			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
+			for _, item in ipairs(ProcessWatcher._menu._menu) do
 				if item.title and item.title:find("CPU 99%% ●●●○○ 3/5 ticks to clear") then found = true end
 			end
 			assert.is_true(found)
@@ -966,10 +838,10 @@ describe("ProcessWatcher", function()
 
 		it("shows a Tracking section using the same lines as the CLI's status()", function()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
-			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			local found = false
-			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
+			for _, item in ipairs(ProcessWatcher._menu._menu) do
 				if item.title and item.title:find("Chrome: CPU ●○○○○ 1/5 ticks %(80%%%)") then
 					found = true
 				end
@@ -980,7 +852,7 @@ describe("ProcessWatcher", function()
 		it("omits the Tracking section when nothing is accumulating", function()
 			ProcessWatcher:_updateMenu()
 			local found = false
-			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
+			for _, item in ipairs(ProcessWatcher._menu._menu) do
 				if item.title == "Tracking" then found = true end
 			end
 			assert.is_false(found)
@@ -989,7 +861,7 @@ describe("ProcessWatcher", function()
 		it("no longer offers Edit Config", function()
 			ProcessWatcher:_updateMenu()
 			local found = false
-			for _, item in ipairs(ProcessWatcher._menu._menuItems) do
+			for _, item in ipairs(ProcessWatcher._menu._menu) do
 				if item.title and item.title:find("Edit Config") then found = true end
 			end
 			assert.is_false(found)
@@ -1034,9 +906,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("shows top CPU/memory processes once a sample has been taken", function()
-			mock_hs._setExecHandler(
-				function(_cmd) return "111  80.0  10.0 Chrome\n222  20.0  5.0 Finder\n", true, "exit", 0 end
-			)
+			setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n222  20.0  5.0 Finder\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			local s = ProcessWatcher:status()
 			assert.truthy(s:find("Top CPU:"))
@@ -1050,16 +920,14 @@ describe("ProcessWatcher", function()
 		)
 
 		it("lists every PID for a name aggregated across multiple processes", function()
-			mock_hs._setExecHandler(
-				function(_cmd) return "111  50.0  2.0 Chrome\n222  30.0  1.0 Chrome\n", true, "exit", 0 end
-			)
+			setExecHandler(function(_cmd) return "111  50.0  2.0 Chrome\n222  30.0  1.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			assert.truthy(ProcessWatcher:status():find("Chrome %(pid=111,222%)"))
 		end)
 
 		it("shows a Tracking entry for a process accumulating toward a flag", function()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
-			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample() -- one over-threshold sample: counter 1/5, not yet flagged
 			local s = ProcessWatcher:status()
 			assert.truthy(s:find("Tracking %(not yet flagged%):"))
@@ -1070,7 +938,7 @@ describe("ProcessWatcher", function()
 		it("excludes already-flagged names from the Tracking section", function()
 			-- interval=2, sustainSeconds=3 floors to 1 tick, so a single sample flags immediately.
 			ProcessWatcher:configure({ interval = 2, sustainSeconds = 3, cpuThreshold = 50 })
-			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			assert.is.table(ProcessWatcher._flagged["Chrome"])
 			assert.is_nil(ProcessWatcher:status():find("Tracking"))
@@ -1078,14 +946,14 @@ describe("ProcessWatcher", function()
 
 		it("excludes names that are below threshold (zero ticks)", function()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 90 })
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			assert.is_nil(ProcessWatcher:status():find("Tracking"))
 		end)
 
 		it("combines CPU and Mem tracking progress on one line for the same name", function()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50, memThreshold = 50 })
-			mock_hs._setExecHandler(function(_cmd) return "111  80.0  80.0 Chrome\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  80.0  80.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			local s = ProcessWatcher:status()
 			assert.truthy(
@@ -1147,57 +1015,57 @@ describe("ProcessWatcher", function()
 		before_each(function() ProcessWatcher:loadConfig() end)
 
 		it("does not start a second ps while one is still running", function()
-			mock_hs._deferTasks = true
+			deferTasks = true
 			ProcessWatcher:_sample()
 			ProcessWatcher:_sample()
-			assert.are.equal(1, #mock_hs._tasks)
+			assert.are.equal(1, #ctl.tasks)
 		end)
 
 		it("samples again once the previous ps has finished", function()
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
-			mock_hs._deferTasks = true
+			setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			deferTasks = true
 			ProcessWatcher:_sample()
-			mock_hs._tasks[1]._finish()
+			finishTask(ctl.tasks[1])
 			assert.is.table(ProcessWatcher._lastSample["Finder"])
 			ProcessWatcher:_sample()
-			assert.are.equal(2, #mock_hs._tasks)
+			assert.are.equal(2, #ctl.tasks)
 		end)
 
 		it("abandons a ps that never reports back so sampling can't stay stuck", function()
-			mock_hs._now = 0
-			mock_hs._deferTasks = true
+			ctl.now = 0
+			deferTasks = true
 			ProcessWatcher:_sample()
-			local stuck = mock_hs._tasks[1]
-			mock_hs._now = ProcessWatcher._config.interval * 2 + 1
+			local stuck = ctl.tasks[1]
+			ctl.now = ProcessWatcher._config.interval * 2 + 1
 			ProcessWatcher:_sample()
 			assert.is_true(stuck._terminated)
-			assert.are.equal(2, #mock_hs._tasks)
+			assert.are.equal(2, #ctl.tasks)
 		end)
 
 		it("does not abandon a ps that is merely slow", function()
-			mock_hs._now = 0
-			mock_hs._deferTasks = true
+			ctl.now = 0
+			deferTasks = true
 			ProcessWatcher:_sample()
-			mock_hs._now = ProcessWatcher._config.interval
+			ctl.now = ProcessWatcher._config.interval
 			ProcessWatcher:_sample()
-			assert.are.equal(1, #mock_hs._tasks)
+			assert.are.equal(1, #ctl.tasks)
 		end)
 
 		it("allows sampling again after ps fails", function()
-			mock_hs._setExecHandler(function(_cmd) return "", false, "exit", 1 end)
+			setExecHandler(function(_cmd) return "", false, "exit", 1 end)
 			ProcessWatcher:_sample()
 			ProcessWatcher:_sample()
-			assert.are.equal(2, #mock_hs._tasks)
+			assert.are.equal(2, #ctl.tasks)
 		end)
 
 		it("ignores a ps result that arrives after stop", function()
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
-			mock_hs._deferTasks = true
+			setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			deferTasks = true
 			ProcessWatcher:start()
-			local task = mock_hs._tasks[1]
+			local task = ctl.tasks[1]
 			ProcessWatcher:stop()
 			assert.is_true(task._terminated)
-			task._finish()
+			finishTask(task)
 			assert.is_nil(ProcessWatcher._lastSample["Finder"])
 		end)
 
@@ -1205,14 +1073,14 @@ describe("ProcessWatcher", function()
 			ProcessWatcher:start()
 			ProcessWatcher._sample = function() error("boom") end
 			local timer = ProcessWatcher._timer
-			assert.has_no.errors(function() timer._fn() end)
-			assert.truthy(#ProcessWatcher.log._errors > 0)
+			assert.has_no.errors(function() timer:fire() end)
+			assert.truthy(#ctl.logged("error") > 0)
 		end)
 	end)
 
 	describe("start/stop lifecycle", function()
 		it("creates a menu bar item and a recurring timer on start", function()
-			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "", true, "exit", 0 end)
 			ProcessWatcher:start()
 			assert.is.table(ProcessWatcher._menu)
 			assert.is.table(ProcessWatcher._timer)
@@ -1220,13 +1088,13 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("sets an autosave name so macOS remembers the menu bar item position", function()
-			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "", true, "exit", 0 end)
 			ProcessWatcher:start()
 			assert.are.equal("ProcessWatcher", ProcessWatcher._menu._autosaveName)
 		end)
 
 		it("tears down menu and timer on stop", function()
-			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "", true, "exit", 0 end)
 			ProcessWatcher:start()
 			ProcessWatcher:stop()
 			assert.is_nil(ProcessWatcher._menu)
@@ -1235,7 +1103,7 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("rebuilds the menu bar icon on start so a CLI reload (stop/start) keeps it visible", function()
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
 			ProcessWatcher:init()
 			local iconFromInit = ProcessWatcher._icon
 			ProcessWatcher:start()
@@ -1247,23 +1115,23 @@ describe("ProcessWatcher", function()
 		end)
 
 		it("warns on start if hs.ipc is not loaded (CLI would silently fail)", function()
-			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
-			mock_hs.ipc = nil
+			setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			hs.ipc = false
 			ProcessWatcher:start()
-			assert.truthy(#ProcessWatcher.log._warnings > 0)
+			assert.truthy(#ctl.logged("warning") > 0)
 		end)
 
 		it("does not warn on start if hs.ipc is loaded", function()
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
-			mock_hs.ipc = {}
+			setExecHandler(function(_cmd) return "111  10.0  1.0 Finder\n", true, "exit", 0 end)
+			hs.ipc = {}
 			ProcessWatcher:start()
-			assert.are.equal(0, #ProcessWatcher.log._warnings)
+			assert.are.equal(0, #ctl.logged("warning"))
 		end)
 	end)
 
 	describe("wake grace period", function()
 		before_each(function()
-			mock_hs._setExecHandler(function(_cmd) return "", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "", true, "exit", 0 end)
 		end)
 
 		local function startWithSustainConfig(wakeGraceSeconds)
@@ -1272,15 +1140,15 @@ describe("ProcessWatcher", function()
 		end
 
 		local function sleepAndWake(secondsAgo)
-			mock_hs._fireCaffeinateEvent(mock_hs.caffeinate.watcher.systemWillSleep)
+			ctl.caffeinate(hs.caffeinate.watcher.systemWillSleep)
 			ProcessWatcher._sleepStartedAt = os.time() - secondsAgo
-			mock_hs._fireCaffeinateEvent()
+			ctl.caffeinate(hs.caffeinate.watcher.systemDidWake)
 		end
 
 		it("creates and starts a caffeinate watcher on start", function()
 			ProcessWatcher:start()
 			assert.is.table(ProcessWatcher._wakeWatcher)
-			assert.is_true(ProcessWatcher._wakeWatcher._started)
+			assert.is_true(ProcessWatcher._wakeWatcher:isRunning())
 		end)
 
 		it("stops the caffeinate watcher on stop", function()
@@ -1288,28 +1156,28 @@ describe("ProcessWatcher", function()
 			local w = ProcessWatcher._wakeWatcher
 			ProcessWatcher:stop()
 			assert.is_nil(ProcessWatcher._wakeWatcher)
-			assert.is_false(w._started)
+			assert.is_false(w:isRunning())
 		end)
 
 		it("sets a grace deadline on systemDidWake", function()
 			ProcessWatcher:configure({ wakeGraceSeconds = 60 })
 			ProcessWatcher:start()
 			local before = os.time()
-			mock_hs._fireCaffeinateEvent()
+			ctl.caffeinate(hs.caffeinate.watcher.systemDidWake)
 			assert.is_true(ProcessWatcher._graceUntil >= before + 60)
 		end)
 
 		it("does not set a grace deadline when wakeGraceSeconds is 0 (disabled)", function()
 			ProcessWatcher:configure({ wakeGraceSeconds = 0 })
 			ProcessWatcher:start()
-			mock_hs._fireCaffeinateEvent()
+			ctl.caffeinate(hs.caffeinate.watcher.systemDidWake)
 			assert.are.equal(0, ProcessWatcher._graceUntil)
 		end)
 
 		it("suppresses new sustain ticks for an over-threshold sample during grace", function()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
 			ProcessWatcher._graceUntil = os.time() + 60
-			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			assert.are.equal(0, ProcessWatcher._counters.cpu["Chrome"] or 0)
 		end)
@@ -1318,7 +1186,7 @@ describe("ProcessWatcher", function()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
 			ProcessWatcher._counters.cpu["Chrome"] = 3
 			ProcessWatcher._graceUntil = os.time() + 60
-			mock_hs._setExecHandler(function(_cmd) return "111  10.0  10.0 Chrome\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  10.0  10.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			assert.are.equal(2, ProcessWatcher._counters.cpu["Chrome"])
 		end)
@@ -1326,7 +1194,7 @@ describe("ProcessWatcher", function()
 		it("resumes accumulating ticks once the grace period has elapsed", function()
 			ProcessWatcher:configure({ interval = 1, sustainSeconds = 5, cpuThreshold = 50 })
 			ProcessWatcher._graceUntil = os.time() - 1
-			mock_hs._setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
+			setExecHandler(function(_cmd) return "111  80.0  10.0 Chrome\n", true, "exit", 0 end)
 			ProcessWatcher:_sample()
 			assert.are.equal(1, ProcessWatcher._counters.cpu["Chrome"])
 		end)
@@ -1353,16 +1221,16 @@ describe("ProcessWatcher", function()
 			assert.is.table(ProcessWatcher._flagged["Bad"])
 			sleepAndWake(1200)
 			assert.is_nil(ProcessWatcher._flagged["Bad"])
-			assert.are.equal(1, #mock_hs.notify._withdrawn)
+			assert.are.equal(1, #withdrawn())
 		end)
 
 		it("withdraws pending notifications on systemWillSleep (silences stale pre-sleep alerts)", function()
 			startWithSustainConfig()
 			ProcessWatcher:_flag("Bad", "cpu", 99, ProcessWatcher._config.sustainSeconds, { "1" })
-			assert.are.equal(1, #mock_hs.notify._sent)
-			assert.are.equal(0, #mock_hs.notify._withdrawn)
-			mock_hs._fireCaffeinateEvent(mock_hs.caffeinate.watcher.systemWillSleep)
-			assert.are.equal(1, #mock_hs.notify._withdrawn)
+			assert.are.equal(1, #sent())
+			assert.are.equal(0, #withdrawn())
+			ctl.caffeinate(hs.caffeinate.watcher.systemWillSleep)
+			assert.are.equal(1, #withdrawn())
 			-- Internal flagged state is left intact -- only the OS notification banner is silenced,
 			-- so the menu bar/status still reflect it, and it resolves normally via the leaky bucket.
 			assert.is.table(ProcessWatcher._flagged["Bad"])
@@ -1371,7 +1239,7 @@ describe("ProcessWatcher", function()
 		it("clears counters on wake when no sleep start was recorded (unknown duration is treated as stale)", function()
 			startWithSustainConfig()
 			ProcessWatcher._counters.cpu["Chrome"] = 15
-			mock_hs._fireCaffeinateEvent() -- systemDidWake with no prior systemWillSleep
+			ctl.caffeinate(hs.caffeinate.watcher.systemDidWake) -- systemDidWake with no prior systemWillSleep
 			assert.is_nil(ProcessWatcher._counters.cpu["Chrome"])
 		end)
 
