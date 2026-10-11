@@ -46,10 +46,12 @@ before_each(function()
 	ctl.onTask = function(task)
 		if not deferTasks then return runTask(task) end
 	end
-	hs.execute = function(cmd) return execHandler(cmd) end
-	-- hs_mock raises on reading an unset hs.<name>; false is "not loaded".
+	ctl.onExecute = function(cmd) return execHandler(cmd) end
+	-- Tests start from "hs.ipc not loaded" (hs_mock has it present), the case the
+	-- start-up warning covers; the ipc tests set it explicitly.
 	hs.ipc = false
-	hs.open = function() end
+	-- Local, not in hs_mock: an honest hs.canvas would need drawing and image
+	-- rendering; these tests only check the icon is rebuilt as a template.
 	hs.canvas = {
 		new = function(rect)
 			local c = { _rect = rect }
