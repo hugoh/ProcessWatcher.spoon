@@ -1,0 +1,3 @@
+return {
+	_all = { lpath = ".rocks/share/lua/5.4/?.lua;.rocks/share/lua/5.4/?/init.lua" },
+}

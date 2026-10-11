@@ -18,6 +18,9 @@ uv = "0.12.23"
 "github:owenlamont/ryl" = "0.23.0"
 zizmor = "1.30.1"
 
+[env]
+HS_MOCK_VERSION = "1.6.1"
+
 [tasks.docs]
 run = "uvx --from git+https://github.com/hugoh/spoon-tools spoon-generate-docs"
 description = "Generate docs/docs.json and docs/index.html from docstrings"
@@ -36,7 +39,14 @@ rm -rf dist
 """
 description = "Build a self-contained ProcessWatcher.spoon.zip (includes docs.json)"
 
+[tasks.deps]
+description = "Install the pinned hs_mock into the project-local .rocks tree"
+run = "luarocks install --tree .rocks https://github.com/hugoh/spoon-tools/releases/download/v$HS_MOCK_VERSION/hs-mock-$HS_MOCK_VERSION-1.rockspec"
+sources = ["mise.toml"]
+outputs = [".rocks/lib/luarocks/rocks-5.4/hs-mock/*/rock_manifest"]
+
 [tasks.test]
+depends = ["deps"]
 run = "busted test_spec.lua --verbose"
 
 [hooks]
