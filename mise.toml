@@ -14,7 +14,7 @@ rumdl = "0.2.78"
 stylua = "2.5.2"
 tombi = "1.7.1"
 typos = "1.50.3"
-uv = "0.12.22"
+uv = "0.12.23"
 "github:owenlamont/ryl" = "0.22.0"
 zizmor = "1.30.1"
 
