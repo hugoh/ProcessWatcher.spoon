@@ -41,7 +41,7 @@ description = "Build a self-contained ProcessWatcher.spoon.zip (includes docs.js
 
 [tasks.deps]
 description = "Install the pinned hs_mock into the project-local .rocks tree"
-run = "luarocks install --tree .rocks https://github.com/hugoh/hs-mock/releases/download/v$HS_MOCK_VERSION/hs-mock-$HS_MOCK_VERSION-1.rockspec"
+run = "luarocks install --tree .rocks hs-mock $HS_MOCK_VERSION"
 sources = ["mise.toml"]
 outputs = [".rocks/lib/luarocks/rocks-5.4/hs-mock/*/rock_manifest"]
 
