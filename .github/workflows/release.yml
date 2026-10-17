@@ -29,7 +29,7 @@ on: # yamllint disable-line rule:truthy
 
 jobs:
   release:
-    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@526f112bfc511e4429d394619e7243465c30c8ba # v1.5.0
+    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@249a33ba5e25388c6ac451ac3a97b7a3c37c34b3 # v1.9.1
     with:
       spoon_name: ProcessWatcher
       tag: ${{ inputs.tag }}
