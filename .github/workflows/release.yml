@@ -34,7 +34,7 @@ jobs:
       contents: write
       pages: write
       id-token: write
-    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@249a33ba5e25388c6ac451ac3a97b7a3c37c34b3 # v1.9.1
+    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@64c61b81636cdf959b41a360792ebe98ffed6f56 # v2.0.5
     with:
       spoon_name: ProcessWatcher
       tag: ${{ inputs.tag }}
