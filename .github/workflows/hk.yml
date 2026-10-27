@@ -1,9 +1,10 @@
 name: hk
 
-permissions:
-  contents: read
-  packages: read
-  statuses: write
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-caller-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on: # yamllint disable-line rule:truthy
   push:
