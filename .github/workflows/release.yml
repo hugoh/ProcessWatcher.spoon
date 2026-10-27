@@ -1,9 +1,10 @@
 name: Release
 
-permissions:
-  contents: write
-  pages: write
-  id-token: write
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-caller-${{ github.ref }}
+  cancel-in-progress: false
 
 on: # yamllint disable-line rule:truthy
   push:
@@ -29,6 +30,10 @@ on: # yamllint disable-line rule:truthy
 
 jobs:
   release:
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
     uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@249a33ba5e25388c6ac451ac3a97b7a3c37c34b3 # v1.9.1
     with:
       spoon_name: ProcessWatcher
