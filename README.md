@@ -1,7 +1,7 @@
 # ProcessWatcher Spoon
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Hammerspoon Spoon](https://img.shields.io/badge/Hammerspoon-Spoon-FFA500.svg)](https://www.hammerspoon.org/docs/index.html)
+[![Hammerspoon Spoon](https://img.shields.io/badge/Hammerspoon-Spoon-FFA500.svg)](https://processwatcher-spoon.larve.net/)
 
 A Hammerspoon Spoon that watches for processes that have gotten out of hand — sustained high CPU or memory usage — warns you with an actionable notification, and shows current status in the menu bar.
 
