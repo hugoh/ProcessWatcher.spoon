@@ -14,7 +14,7 @@ on: # yamllint disable-line rule:truthy
 
 jobs:
   check:
-    uses: hugoh/gh-workflows/.github/workflows/hk.yml@22fda8a15b673e6acc9c89422bd4c38adec3cb14 # v1.40.18
+    uses: hugoh/gh-workflows/.github/workflows/hk.yml@12a131c8eca966fe30bcc4ca670fa596b375702f # v1.40.19
     permissions:
       contents: read
       packages: read

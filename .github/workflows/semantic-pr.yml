@@ -13,6 +13,6 @@ concurrency:
 
 jobs:
   semantic-pr:
-    uses: hugoh/gh-workflows/.github/workflows/semantic-pr.yml@22fda8a15b673e6acc9c89422bd4c38adec3cb14 # v1.40.18
+    uses: hugoh/gh-workflows/.github/workflows/semantic-pr.yml@12a131c8eca966fe30bcc4ca670fa596b375702f # v1.40.19
     permissions:
       pull-requests: read
