@@ -1,0 +1,75 @@
+name: ci
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-caller-${{ github.event.pull_request.number || github.ref }}
+  # Cancel superseded PR runs; never cancel a push-to-main run mid-release.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+on: # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release (used to backfill a missed release; leave empty for normal use)
+        required: false
+        type: string
+      bump:
+        description: Force the bump level (auto = derive from commits)
+        required: false
+        type: choice
+        default: auto
+        options: [auto, patch, minor, major]
+      docs_only:
+        description: Regenerate and redeploy the Pages docs only (no bump, no release)
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  check:
+    uses: hugoh/gh-workflows/.github/workflows/hk.yml@ae6e1b2ce64760b5418b71668bb9b0a74a3c4c70 # v1.40.22
+    permissions:
+      contents: read
+      packages: read
+      statuses: write
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: hugoh/gh-workflows/setup@ae6e1b2ce64760b5418b71668bb9b0a74a3c4c70 # v1.40.22
+      - run: mise run test
+
+  # The single required status check, and all that release waits on.
+  ci-gate:
+    if: always()
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+  release:
+    needs: ci-gate
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@c1b43f5ee2ea37040dfbcedb00471000f801a7a6 # v2.1.4
+    with:
+      spoon_name: ProcessWatcher
+      tag: ${{ inputs.tag }}
+      bump: ${{ inputs.bump }}
+      docs_only: ${{ inputs.docs_only == true }}
