@@ -32,7 +32,7 @@ on: # yamllint disable-line rule:truthy
 
 jobs:
   check:
-    uses: hugoh/gh-workflows/.github/workflows/hk.yml@ae6e1b2ce64760b5418b71668bb9b0a74a3c4c70 # v1.40.22
+    uses: hugoh/gh-workflows/.github/workflows/hk.yml@8d17bc6b4d7edc0bbec893e0466eb0ba60728721 # v1.40.27
     permissions:
       contents: read
       packages: read
@@ -45,7 +45,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: hugoh/gh-workflows/setup@ae6e1b2ce64760b5418b71668bb9b0a74a3c4c70 # v1.40.22
+      - uses: hugoh/gh-workflows/setup@8d17bc6b4d7edc0bbec893e0466eb0ba60728721 # v1.40.27
       - run: mise run test
 
   # The single required status check, and all that release waits on.
@@ -67,7 +67,7 @@ jobs:
       contents: write
       pages: write
       id-token: write
-    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@c1b43f5ee2ea37040dfbcedb00471000f801a7a6 # v2.1.4
+    uses: hugoh/spoon-tools/.github/workflows/spoon-release.yml@55b2ca22de97f2e4ea07c948eea45852e39dbbc4 # v2.1.9
     with:
       spoon_name: ProcessWatcher
       tag: ${{ inputs.tag }}
